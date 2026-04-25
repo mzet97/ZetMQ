@@ -53,13 +53,14 @@ pub async fn handle_connection(
     broker: Arc<BrokerCore>,
     config: &ServerConfig,
 ) -> Result<(), ServerError> {
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = tokio::io::BufReader::new(reader);
+    let (reader, writer) = stream.into_split();
+    let mut reader = tokio::io::BufReader::with_capacity(65536, reader);
+    let mut writer = tokio::io::BufWriter::with_capacity(65536, writer);
 
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<Frame>(config.connection_output_buffer);
 
     let mut state = SessionState::New;
-    let mut read_buf = BytesMut::with_capacity(4096);
+    let mut read_buf = BytesMut::with_capacity(65536);
 
     // Split into read and write tasks
     let write_handle = tokio::spawn(async move {
@@ -68,11 +69,21 @@ pub async fn handle_connection(
             if writer.write_all(&encoded).await.is_err() {
                 break;
             }
+            // Drain any queued frames before flushing
+            while let Ok(frame) = outbound_rx.try_recv() {
+                let encoded = frame.encode();
+                if writer.write_all(&encoded).await.is_err() {
+                    break;
+                }
+            }
+            if writer.flush().await.is_err() {
+                break;
+            }
         }
     });
 
     // Read loop
-    let mut tmp = [0u8; 4096];
+    let mut tmp = [0u8; 65536];
     loop {
         let n = match reader.read(&mut tmp).await {
             Ok(0) => break, // EOF
