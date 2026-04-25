@@ -163,6 +163,20 @@ impl BrokerCore {
     pub fn metrics(&self) -> &CoreMetrics {
         &self.metrics
     }
+
+    pub fn log_metrics(&self) {
+        let s = self.metrics.snapshot();
+        tracing::info!(
+            active_connections = s.active_connections,
+            total_connections = s.total_connections,
+            active_subscriptions = s.active_subscriptions,
+            messages_published = s.messages_published,
+            messages_delivered = s.messages_delivered,
+            messages_dropped = s.messages_dropped,
+            protocol_errors = s.protocol_errors,
+            "metrics snapshot"
+        );
+    }
 }
 
 #[cfg(test)]

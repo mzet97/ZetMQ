@@ -96,7 +96,10 @@ async fn test_connect_subscribe_publish_msg() {
 
     // Send SUB
     let sub = sub_frame("test.subject", 10);
-    sub_stream.write_all(&sub.encode()).await.expect("write sub");
+    sub_stream
+        .write_all(&sub.encode())
+        .await
+        .expect("write sub");
 
     // Read SUBACK
     let suback = read_frame(&mut sub_stream).await;
@@ -132,8 +135,7 @@ async fn test_connect_subscribe_publish_msg() {
     assert_eq!(subject, "test.subject");
 
     // Skip reply_to (u16 len + data)
-    let reply_len =
-        u16::from_be_bytes([payload[2 + subj_len], payload[3 + subj_len]]) as usize;
+    let reply_len = u16::from_be_bytes([payload[2 + subj_len], payload[3 + subj_len]]) as usize;
     let data_start = 2 + subj_len + 2 + reply_len + 8; // +8 for subscription_id
     let data = &payload[data_start..];
     assert_eq!(data, b"hello world");
