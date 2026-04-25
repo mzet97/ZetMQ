@@ -91,6 +91,13 @@ impl SubscriptionRegistry {
         self.subscribers.get(&sub_id).map(|r| r.value().clone())
     }
 
+    pub fn get_subscriber_ref(
+        &self,
+        sub_id: SubscriptionId,
+    ) -> Option<dashmap::mapref::one::Ref<'_, SubscriptionId, Subscriber>> {
+        self.subscribers.get(&sub_id)
+    }
+
     pub fn get_by_connection(&self, connection_id: ConnectionId) -> Vec<SubscriptionId> {
         self.by_connection
             .get(&connection_id)

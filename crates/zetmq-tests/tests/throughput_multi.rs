@@ -8,7 +8,6 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 use zetmq_core::BrokerCore;
-use zetmq_protocol::frame::header::FRAME_HEADER_SIZE;
 use zetmq_protocol::{Frame, FrameType};
 use zetmq_server::config::ServerConfig;
 use zetmq_server::network::TcpServer;
@@ -35,26 +34,40 @@ fn pub_frame(subject: &str, payload: &[u8], corr_id: u64) -> Frame {
     Frame::new(FrameType::Pub, corr_id).with_payload(data.into())
 }
 
-async fn read_frame_fast(stream: &mut TcpStream) -> Option<Frame> {
-    let mut header_buf = [0u8; FRAME_HEADER_SIZE];
-    tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut header_buf))
+/// Buffered frame reader — reads large chunks, parses multiple frames per read.
+async fn read_frame_buffered(stream: &mut TcpStream, buf: &mut BytesMut) -> Option<Frame> {
+    loop {
+        if let Some(frame) = Frame::decode_from(buf, 2 * 1024 * 1024).unwrap() {
+            return Some(frame);
+        }
+        let mut tmp = [0u8; 65536];
+        let n = stream.read(&mut tmp).await.ok()?;
+        if n == 0 {
+            return None;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+    }
+}
+
+/// Read a frame with timeout using buffered reading.
+async fn read_frame_timeout(
+    stream: &mut TcpStream,
+    buf: &mut BytesMut,
+    timeout: Duration,
+) -> Option<Frame> {
+    if let Some(frame) = Frame::decode_from(buf, 2 * 1024 * 1024).unwrap() {
+        return Some(frame);
+    }
+    let mut tmp = [0u8; 65536];
+    let n = tokio::time::timeout(timeout, stream.read(&mut tmp))
         .await
         .ok()?
         .ok()?;
-    let mut buf = BytesMut::from(&header_buf[..]);
-    let header = zetmq_protocol::FrameHeader::decode(&mut buf).ok()?;
-    let rest_size = header.header_len as usize + header.payload_len as usize;
-    let mut rest = vec![0u8; rest_size];
-    if rest_size > 0 {
-        tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut rest))
-            .await
-            .ok()?
-            .ok()?;
+    if n == 0 {
+        return None;
     }
-    let mut full = BytesMut::with_capacity(FRAME_HEADER_SIZE + rest_size);
-    full.extend_from_slice(&header_buf);
-    full.extend_from_slice(&rest);
-    Frame::decode_from(&mut full, 2 * 1024 * 1024).ok()?
+    buf.extend_from_slice(&tmp[..n]);
+    Frame::decode_from(buf, 2 * 1024 * 1024).unwrap()
 }
 
 async fn connect_client(addr: &str) -> TcpStream {
@@ -64,14 +77,17 @@ async fn connect_client(addr: &str) -> TcpStream {
         .write_all(&connect_frame().encode())
         .await
         .expect("write connect");
-    let _ack = read_frame_fast(&mut stream).await.expect("read connack");
+    let mut buf = BytesMut::with_capacity(4096);
+    let _ack = read_frame_buffered(&mut stream, &mut buf)
+        .await
+        .expect("read connack");
     stream
 }
 
-fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
+fn start_server(port: u16, output_buffer: usize) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
     let config = ServerConfig {
         port,
-        connection_output_buffer: 65536,
+        connection_output_buffer: output_buffer,
         ..Default::default()
     };
     let broker = BrokerCore::new();
@@ -90,7 +106,7 @@ fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
 async fn bench_concurrent_pubsub() {
     let port = 14400;
     let addr = format!("127.0.0.1:{port}");
-    let (broker, server) = start_server(port);
+    let (broker, server) = start_server(port, 262144);
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let num_subs = 4;
@@ -98,7 +114,7 @@ async fn bench_concurrent_pubsub() {
     let msgs_per_pub = 50_000u64;
     let total_expected = num_subs as u64 * msgs_per_pub * num_pubs as u64;
 
-    // Spawn subscriber tasks
+    // Spawn subscriber tasks with buffered reading
     let total_received = Arc::new(AtomicU64::new(0));
     let mut sub_handles = Vec::new();
 
@@ -111,10 +127,12 @@ async fn bench_concurrent_pubsub() {
                 .write_all(&sub_frame(&format!("bench.{s}"), 1).encode())
                 .await
                 .unwrap();
-            let _suback = read_frame_fast(&mut stream).await;
+            let mut sub_buf = BytesMut::with_capacity(65536);
+            let _suback = read_frame_buffered(&mut stream, &mut sub_buf).await;
 
+            let mut buf = BytesMut::with_capacity(131072);
             loop {
-                match read_frame_fast(&mut stream).await {
+                match read_frame_timeout(&mut stream, &mut buf, Duration::from_secs(5)).await {
                     Some(frame) if frame.frame_type().ok() == Some(FrameType::Msg) => {
                         counter.fetch_add(1, Ordering::Relaxed);
                     }
@@ -127,7 +145,7 @@ async fn bench_concurrent_pubsub() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Spawn publisher tasks
+    // Spawn publisher tasks with batched writing
     let mut pub_handles = Vec::new();
     let start = Instant::now();
 
@@ -136,14 +154,23 @@ async fn bench_concurrent_pubsub() {
         let handle = tokio::spawn(async move {
             let mut stream = connect_client(&addr_c).await;
             let payload = [0u8; 64]; // 64-byte payload
+            let mut write_buf = BytesMut::with_capacity(131072);
 
             // Each publisher sends to all subscriber subjects
             for s in 0..num_subs {
                 for m in 0..msgs_per_pub {
                     let subject = format!("bench.{s}");
                     let frame = pub_frame(&subject, &payload, m);
-                    stream.write_all(&frame.encode()).await.unwrap();
+                    frame.encode_into(&mut write_buf);
+                    if write_buf.len() >= 65536 {
+                        stream.write_all(&write_buf).await.unwrap();
+                        write_buf.clear();
+                    }
                 }
+            }
+            // Flush remaining
+            if !write_buf.is_empty() {
+                stream.write_all(&write_buf).await.unwrap();
             }
         });
         pub_handles.push(handle);
@@ -197,7 +224,7 @@ async fn bench_concurrent_pubsub() {
 async fn bench_concurrent_publish() {
     let port = 14401;
     let addr = format!("127.0.0.1:{port}");
-    let (broker, server) = start_server(port);
+    let (broker, server) = start_server(port, 65536);
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let num_pubs = 8;
@@ -211,11 +238,19 @@ async fn bench_concurrent_publish() {
         let handle = tokio::spawn(async move {
             let mut stream = connect_client(&addr_c).await;
             let payload = [0u8; 64];
+            let mut write_buf = BytesMut::with_capacity(131072);
 
             for m in 0..msgs_per_pub {
                 let subject = format!("bench.pub.{p}");
                 let frame = pub_frame(&subject, &payload, m);
-                stream.write_all(&frame.encode()).await.unwrap();
+                frame.encode_into(&mut write_buf);
+                if write_buf.len() >= 65536 {
+                    stream.write_all(&write_buf).await.unwrap();
+                    write_buf.clear();
+                }
+            }
+            if !write_buf.is_empty() {
+                stream.write_all(&write_buf).await.unwrap();
             }
         });
         handles.push(handle);

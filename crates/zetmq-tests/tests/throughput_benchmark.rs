@@ -8,7 +8,6 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 use zetmq_core::BrokerCore;
-use zetmq_protocol::frame::header::FRAME_HEADER_SIZE;
 use zetmq_protocol::{Frame, FrameType};
 use zetmq_server::config::ServerConfig;
 use zetmq_server::network::TcpServer;
@@ -37,28 +36,72 @@ fn pub_frame(subject: &str, payload: &[u8], corr_id: u64) -> Frame {
     Frame::new(FrameType::Pub, corr_id).with_payload(data.into())
 }
 
-async fn read_frame(stream: &mut TcpStream) -> Frame {
-    let mut header_buf = vec![0u8; FRAME_HEADER_SIZE];
-    stream
-        .read_exact(&mut header_buf)
+/// Buffered frame reader — reads large chunks, parses multiple frames per read.
+/// Eliminates 2 syscalls/frame → ~1 syscall/many-frames.
+async fn read_frame_buffered(stream: &mut TcpStream, buf: &mut BytesMut) -> Frame {
+    loop {
+        if let Some(frame) = Frame::decode_from(buf, 2 * 1024 * 1024).unwrap() {
+            return frame;
+        }
+        let mut tmp = [0u8; 65536];
+        let n = stream.read(&mut tmp).await.expect("read");
+        assert!(n > 0, "unexpected EOF");
+        buf.extend_from_slice(&tmp[..n]);
+    }
+}
+
+/// Read a frame with timeout using buffered reading.
+async fn read_frame_timeout(
+    stream: &mut TcpStream,
+    buf: &mut BytesMut,
+    timeout: Duration,
+) -> Option<Frame> {
+    // Try to decode from existing buffer first
+    if let Some(frame) = Frame::decode_from(buf, 2 * 1024 * 1024).unwrap() {
+        return Some(frame);
+    }
+    // Need more data — read with timeout
+    let mut tmp = [0u8; 65536];
+    let n = tokio::time::timeout(timeout, stream.read(&mut tmp))
         .await
-        .expect("read header");
+        .ok()?
+        .ok()?;
+    if n == 0 {
+        return None;
+    }
+    buf.extend_from_slice(&tmp[..n]);
+    Frame::decode_from(buf, 2 * 1024 * 1024).unwrap()
+}
 
-    let mut buf = BytesMut::from(&header_buf[..]);
-    let header = zetmq_protocol::FrameHeader::decode(&mut buf).expect("decode header");
-    let rest_size = header.header_len as usize + header.payload_len as usize;
+/// Batch-encode frames into a buffer and flush when threshold is reached.
+struct BatchWriter<'a> {
+    stream: &'a mut TcpStream,
+    buf: BytesMut,
+    flush_threshold: usize,
+}
 
-    let mut rest = vec![0u8; rest_size];
-    if rest_size > 0 {
-        stream.read_exact(&mut rest).await.expect("read payload");
+impl<'a> BatchWriter<'a> {
+    fn new(stream: &'a mut TcpStream) -> Self {
+        Self {
+            stream,
+            buf: BytesMut::with_capacity(131072),
+            flush_threshold: 65536,
+        }
     }
 
-    let mut full = BytesMut::with_capacity(FRAME_HEADER_SIZE + rest_size);
-    full.extend_from_slice(&header_buf);
-    full.extend_from_slice(&rest);
-    Frame::decode_from(&mut full, 2 * 1024 * 1024)
-        .unwrap()
-        .unwrap()
+    async fn write_frame(&mut self, frame: &Frame) {
+        frame.encode_into(&mut self.buf);
+        if self.buf.len() >= self.flush_threshold {
+            self.flush().await;
+        }
+    }
+
+    async fn flush(&mut self) {
+        if !self.buf.is_empty() {
+            self.stream.write_all(&self.buf).await.unwrap();
+            self.buf.clear();
+        }
+    }
 }
 
 async fn connect_client(addr: &str) -> TcpStream {
@@ -68,7 +111,8 @@ async fn connect_client(addr: &str) -> TcpStream {
         .write_all(&connect_frame().encode())
         .await
         .expect("write connect");
-    let _ack = read_frame(&mut stream).await;
+    let mut buf = BytesMut::with_capacity(4096);
+    let _ack = read_frame_buffered(&mut stream, &mut buf).await;
     stream
 }
 
@@ -77,7 +121,6 @@ async fn connect_client(addr: &str) -> TcpStream {
 fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
     let config = ServerConfig {
         port,
-        connection_output_buffer: 8192,
         ..Default::default()
     };
     let broker = BrokerCore::new();
@@ -103,23 +146,27 @@ async fn bench_publish_throughput() {
 
     let mut pub_stream = connect_client(&addr).await;
 
-    let total = 100_000u64;
+    let total = 200_000u64;
     let payload = b"x"; // 1-byte payload
-    let warmup = 1000;
+    let warmup = 2000;
 
-    // Warmup
+    // Warmup with batched writes
+    let mut writer = BatchWriter::new(&mut pub_stream);
     for _ in 0..warmup {
         let frame = pub_frame("bench.pub", payload, 0);
-        pub_stream.write_all(&frame.encode()).await.unwrap();
+        writer.write_frame(&frame).await;
     }
+    writer.flush().await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Benchmark
+    // Benchmark with batched writes
     let start = Instant::now();
+    let mut writer = BatchWriter::new(&mut pub_stream);
     for i in 0..total {
         let frame = pub_frame("bench.pub", payload, i);
-        pub_stream.write_all(&frame.encode()).await.unwrap();
+        writer.write_frame(&frame).await;
     }
+    writer.flush().await;
     // Give server time to process
     tokio::time::sleep(Duration::from_millis(500)).await;
     let elapsed = start.elapsed();
@@ -153,39 +200,43 @@ async fn bench_pubsub_throughput() {
         .write_all(&sub_frame("bench.e2e", 1).encode())
         .await
         .unwrap();
-    let _suback = read_frame(&mut sub_stream).await;
+    let mut sub_buf = BytesMut::with_capacity(65536);
+    let _suback = read_frame_buffered(&mut sub_stream, &mut sub_buf).await;
 
     // Publisher
     let mut pub_stream = connect_client(&addr).await;
 
-    let total = 50_000u64;
+    let total = 100_000u64;
     let payload = b"hello-zetmq"; // 11 bytes
 
-    // Spawn reader task that counts received messages
+    // Spawn reader task that counts received messages (buffered)
     let received = Arc::new(AtomicU64::new(0));
     let received_clone = received.clone();
     let reader = tokio::spawn(async move {
+        let mut buf = BytesMut::with_capacity(131072);
         loop {
-            match tokio::time::timeout(Duration::from_secs(5), read_frame(&mut sub_stream)).await {
-                Ok(frame) => {
+            match read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await {
+                Some(frame) => {
                     if frame.frame_type().ok() == Some(FrameType::Msg) {
                         received_clone.fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                Err(_) => break, // timeout
+                None => break, // timeout or EOF
             }
         }
     });
 
-    // Benchmark publish
+    // Benchmark publish with batching
     let start = Instant::now();
+    let mut writer = BatchWriter::new(&mut pub_stream);
     for i in 0..total {
         let frame = pub_frame("bench.e2e", payload, i);
-        pub_stream.write_all(&frame.encode()).await.unwrap();
+        writer.write_frame(&frame).await;
     }
+    writer.flush().await;
 
     // Wait for reader to catch up
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let r = received.load(Ordering::Relaxed);
         if r >= total || Instant::now() > deadline {
@@ -225,10 +276,10 @@ async fn bench_fanout_throughput() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let num_subs = 4;
-    let total = 20_000u64;
+    let total = 50_000u64;
     let payload = b"fanout";
 
-    // Create subscribers
+    // Create subscribers with buffered reading
     let mut reader_handles = Vec::new();
     let total_received = Arc::new(AtomicU64::new(0));
 
@@ -238,37 +289,39 @@ async fn bench_fanout_throughput() {
             .write_all(&sub_frame("bench.fanout", 1).encode())
             .await
             .unwrap();
-        let _suback = read_frame(&mut sub_stream).await;
+        let mut sub_buf = BytesMut::with_capacity(65536);
+        let _suback = read_frame_buffered(&mut sub_stream, &mut sub_buf).await;
 
         let counter = total_received.clone();
         let handle = tokio::spawn(async move {
+            let mut buf = BytesMut::with_capacity(131072);
             loop {
-                match tokio::time::timeout(Duration::from_secs(5), read_frame(&mut sub_stream))
-                    .await
-                {
-                    Ok(frame) => {
+                match read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await {
+                    Some(frame) => {
                         if frame.frame_type().ok() == Some(FrameType::Msg) {
                             counter.fetch_add(1, Ordering::Relaxed);
                         }
                     }
-                    Err(_) => break,
+                    None => break,
                 }
             }
         });
         reader_handles.push(handle);
     }
 
-    // Publisher
+    // Publisher with batching
     let mut pub_stream = connect_client(&addr).await;
 
     let start = Instant::now();
+    let mut writer = BatchWriter::new(&mut pub_stream);
     for i in 0..total {
         let frame = pub_frame("bench.fanout", payload, i);
-        pub_stream.write_all(&frame.encode()).await.unwrap();
+        writer.write_frame(&frame).await;
     }
+    writer.flush().await;
 
     let expected = total * num_subs as u64;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let r = total_received.load(Ordering::Relaxed);
         if r >= expected || Instant::now() > deadline {
@@ -314,40 +367,44 @@ async fn bench_many_subjects_throughput() {
     let msgs_per_subject = 100u64;
     let total = num_subjects * msgs_per_subject;
 
-    // Subscriber with wildcard
+    // Subscriber with wildcard + buffered reading
     let mut sub_stream = connect_client(&addr).await;
     sub_stream
         .write_all(&sub_frame("bench.>", 1).encode())
         .await
         .unwrap();
-    let _suback = read_frame(&mut sub_stream).await;
+    let mut sub_buf = BytesMut::with_capacity(65536);
+    let _suback = read_frame_buffered(&mut sub_stream, &mut sub_buf).await;
 
     let received = Arc::new(AtomicU64::new(0));
     let received_clone = received.clone();
     let reader = tokio::spawn(async move {
+        let mut buf = BytesMut::with_capacity(131072);
         loop {
-            match tokio::time::timeout(Duration::from_secs(5), read_frame(&mut sub_stream)).await {
-                Ok(frame) => {
+            match read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await {
+                Some(frame) => {
                     if frame.frame_type().ok() == Some(FrameType::Msg) {
                         received_clone.fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                Err(_) => break,
+                None => break,
             }
         }
     });
 
-    // Publisher
+    // Publisher with batching
     let mut pub_stream = connect_client(&addr).await;
 
     let start = Instant::now();
+    let mut writer = BatchWriter::new(&mut pub_stream);
     for s in 0..num_subjects {
         for m in 0..msgs_per_subject {
             let subject = format!("bench.sub{s}");
             let frame = pub_frame(&subject, b"data", m);
-            pub_stream.write_all(&frame.encode()).await.unwrap();
+            writer.write_frame(&frame).await;
         }
     }
+    writer.flush().await;
 
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {

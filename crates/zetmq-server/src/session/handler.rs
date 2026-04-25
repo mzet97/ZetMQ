@@ -67,13 +67,13 @@ pub async fn handle_connection(
 
     // Split into read and write tasks
     let write_handle = tokio::spawn(async move {
-        let mut encode_buf = BytesMut::with_capacity(65536);
+        let mut encode_buf = BytesMut::with_capacity(131072);
         while let Some(frame) = outbound_rx.recv().await {
             frame.encode_into(&mut encode_buf);
-            // Drain any queued frames before flushing
+            // Drain all queued frames — accumulate up to 128KB before flushing
             while let Ok(frame) = outbound_rx.try_recv() {
                 frame.encode_into(&mut encode_buf);
-                if encode_buf.len() > 32768 {
+                if encode_buf.len() >= 131072 {
                     break;
                 }
             }

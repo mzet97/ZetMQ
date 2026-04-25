@@ -139,16 +139,16 @@ impl BrokerCore {
     }
 
     fn deliver_to_subscriber(&self, sub_id: SubscriptionId, message: &Message) {
-        if let Some(subscriber) = self.registry.get_subscriber(sub_id) {
+        if let Some(sub_ref) = self.registry.get_subscriber_ref(sub_id) {
             let delivery_msg = DeliveryMessage {
                 subscription_id: sub_id,
-                connection_id: subscriber.connection_id,
+                connection_id: sub_ref.connection_id,
                 subject: message.subject.clone(),
                 payload: message.payload.clone(),
                 reply_to: message.reply_to.clone(),
             };
 
-            match subscriber.delivery.deliver(delivery_msg) {
+            match sub_ref.delivery.deliver(delivery_msg) {
                 DeliveryStatus::Delivered => {
                     self.metrics.inc_delivered();
                 }

@@ -40,7 +40,7 @@ fn default_max_payload() -> usize {
     1048576 // 1MB
 }
 fn default_output_buffer() -> usize {
-    8192
+    65536
 }
 fn default_max_frame() -> usize {
     2097152 // 2MB
