@@ -12,6 +12,12 @@ pub struct RoutingEngine {
     wildcard_trie: RwLock<SubjectTrie>,
 }
 
+impl Default for RoutingEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RoutingEngine {
     pub fn new() -> Self {
         Self {
@@ -21,10 +27,12 @@ impl RoutingEngine {
     }
 
     pub fn insert(&self, pattern: &SubjectPattern, sub_id: SubscriptionId) {
-        let has_wildcard = pattern
-            .tokens()
-            .iter()
-            .any(|t| matches!(t, PatternToken::SingleWildcard | PatternToken::MultiWildcard));
+        let has_wildcard = pattern.tokens().iter().any(|t| {
+            matches!(
+                t,
+                PatternToken::SingleWildcard | PatternToken::MultiWildcard
+            )
+        });
 
         if !has_wildcard {
             self.exact
@@ -45,15 +53,19 @@ impl RoutingEngine {
                 .tokens()
                 .iter()
                 .any(|t| matches!(t, PatternToken::MultiWildcard));
-            self.wildcard_trie.write().insert(&tokens, sub_id, has_multi);
+            self.wildcard_trie
+                .write()
+                .insert(&tokens, sub_id, has_multi);
         }
     }
 
     pub fn remove(&self, pattern: &SubjectPattern, sub_id: SubscriptionId) {
-        let has_wildcard = pattern
-            .tokens()
-            .iter()
-            .any(|t| matches!(t, PatternToken::SingleWildcard | PatternToken::MultiWildcard));
+        let has_wildcard = pattern.tokens().iter().any(|t| {
+            matches!(
+                t,
+                PatternToken::SingleWildcard | PatternToken::MultiWildcard
+            )
+        });
 
         if !has_wildcard {
             if let Some(mut entry) = self.exact.get_mut(pattern.as_str()) {
@@ -73,7 +85,9 @@ impl RoutingEngine {
                 .tokens()
                 .iter()
                 .any(|t| matches!(t, PatternToken::MultiWildcard));
-            self.wildcard_trie.write().remove(&tokens, sub_id, has_multi);
+            self.wildcard_trie
+                .write()
+                .remove(&tokens, sub_id, has_multi);
         }
     }
 
@@ -81,7 +95,7 @@ impl RoutingEngine {
         let mut results = Vec::new();
 
         if let Some(subs) = self.exact.get(subject.as_str()) {
-            results.extend_from_slice(&*subs);
+            results.extend_from_slice(&subs);
         }
 
         let wildcard_subs = self.wildcard_trie.read().match_subject(subject);
@@ -109,10 +123,7 @@ mod tests {
         let engine = RoutingEngine::new();
         let sub = SubscriptionId::new(1);
         engine.insert(&pattern("orders.created"), sub);
-        assert_eq!(
-            engine.match_subject(&subject("orders.created")),
-            vec![sub]
-        );
+        assert_eq!(engine.match_subject(&subject("orders.created")), vec![sub]);
     }
 
     #[test]
@@ -129,10 +140,7 @@ mod tests {
         let engine = RoutingEngine::new();
         let sub = SubscriptionId::new(1);
         engine.insert(&pattern("orders.*"), sub);
-        assert_eq!(
-            engine.match_subject(&subject("orders.created")),
-            vec![sub]
-        );
+        assert_eq!(engine.match_subject(&subject("orders.created")), vec![sub]);
         assert!(engine
             .match_subject(&subject("orders.created.high"))
             .is_empty());
@@ -143,10 +151,7 @@ mod tests {
         let engine = RoutingEngine::new();
         let sub = SubscriptionId::new(1);
         engine.insert(&pattern("orders.>"), sub);
-        assert_eq!(
-            engine.match_subject(&subject("orders.created")),
-            vec![sub]
-        );
+        assert_eq!(engine.match_subject(&subject("orders.created")), vec![sub]);
         assert_eq!(
             engine.match_subject(&subject("orders.created.high")),
             vec![sub]
