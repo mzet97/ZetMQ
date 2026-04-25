@@ -288,6 +288,40 @@ mod tests {
     }
 
     #[test]
+    fn queue_group_round_robin() {
+        let broker = BrokerCore::new();
+        let d1 = FakeDelivery::new();
+        let d2 = FakeDelivery::new();
+        let qg = QueueGroupName::new("workers").unwrap();
+
+        broker.subscribe(
+            ConnectionId::new(1),
+            pattern("jobs"),
+            Some(qg.clone()),
+            d1.clone(),
+        );
+        broker.subscribe(
+            ConnectionId::new(2),
+            pattern("jobs"),
+            Some(qg.clone()),
+            d2.clone(),
+        );
+
+        // Publish 4 messages — should alternate between the two members
+        for _ in 0..4 {
+            broker.publish(Message::new(
+                subject("jobs"),
+                bytes::Bytes::from_static(b"task"),
+            ));
+        }
+
+        // Each member should receive exactly 2 messages (round-robin)
+        assert_eq!(d1.count(), 2);
+        assert_eq!(d2.count(), 2);
+        assert_eq!(broker.metrics().snapshot().messages_delivered, 4);
+    }
+
+    #[test]
     fn disconnect_removes_all_subscriptions() {
         let broker = BrokerCore::new();
         let conn = ConnectionId::new(1);
