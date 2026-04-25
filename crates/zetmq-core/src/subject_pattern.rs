@@ -13,8 +13,8 @@ pub struct SubjectPattern {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PatternToken {
     Literal(String),
-    SingleWildcard,  // *
-    MultiWildcard,   // >
+    SingleWildcard, // *
+    MultiWildcard,  // >
 }
 
 impl SubjectPattern {
@@ -126,8 +126,12 @@ impl std::fmt::Display for SubjectPattern {
 mod tests {
     use super::*;
 
-    fn subject(s: &str) -> Subject { Subject::parse(s).unwrap() }
-    fn pattern(s: &str) -> SubjectPattern { SubjectPattern::parse(s).unwrap() }
+    fn subject(s: &str) -> Subject {
+        Subject::parse(s).unwrap()
+    }
+    fn pattern(s: &str) -> SubjectPattern {
+        SubjectPattern::parse(s).unwrap()
+    }
 
     #[test]
     fn valid_exact_pattern() {
@@ -148,7 +152,9 @@ mod tests {
     }
 
     #[test]
-    fn reject_empty() { assert!(SubjectPattern::parse("").is_err()); }
+    fn reject_empty() {
+        assert!(SubjectPattern::parse("").is_err());
+    }
 
     #[test]
     fn reject_empty_token() {

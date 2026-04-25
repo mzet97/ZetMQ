@@ -17,6 +17,11 @@ impl Subscription {
         pattern: SubjectPattern,
         queue_group: Option<QueueGroupName>,
     ) -> Self {
-        Self { id, connection_id, pattern, queue_group }
+        Self {
+            id,
+            connection_id,
+            pattern,
+            queue_group,
+        }
     }
 }

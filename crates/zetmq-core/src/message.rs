@@ -53,7 +53,9 @@ impl Message {
 mod tests {
     use super::*;
 
-    fn test_subject(s: &str) -> Subject { Subject::parse(s).unwrap() }
+    fn test_subject(s: &str) -> Subject {
+        Subject::parse(s).unwrap()
+    }
 
     #[test]
     fn create_message() {

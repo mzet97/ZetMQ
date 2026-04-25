@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use crate::delivery::DeliveryHandle;
 use crate::id::{ConnectionId, SubscriptionId};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Subscriber {
@@ -15,6 +15,10 @@ impl Subscriber {
         subscription_id: SubscriptionId,
         delivery: Arc<dyn DeliveryHandle>,
     ) -> Self {
-        Self { connection_id, subscription_id, delivery }
+        Self {
+            connection_id,
+            subscription_id,
+            delivery,
+        }
     }
 }

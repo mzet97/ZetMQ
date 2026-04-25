@@ -1,6 +1,6 @@
-use bytes::Bytes;
 use crate::id::{ConnectionId, SubscriptionId};
 use crate::subject::Subject;
+use bytes::Bytes;
 
 #[derive(Clone, Debug)]
 pub struct DeliveryMessage {
