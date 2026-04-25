@@ -43,6 +43,7 @@ impl TcpServer {
 
         loop {
             let (stream, addr) = listener.accept().await?;
+            stream.set_nodelay(true)?;
             let conn_id = ConnectionId::new(self.conn_counter.fetch_add(1, Ordering::Relaxed));
 
             info!(connection_id = conn_id.0, peer = %addr, "new connection");

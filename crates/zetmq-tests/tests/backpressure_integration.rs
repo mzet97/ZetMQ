@@ -77,6 +77,7 @@ async fn slow_consumer_drops_messages() {
 
     // Connect subscriber that doesn't read (slow consumer)
     let mut sub_stream = TcpStream::connect("127.0.0.1:14223").await.unwrap();
+    sub_stream.set_nodelay(true).unwrap();
     sub_stream
         .write_all(&connect_frame().encode())
         .await
@@ -94,6 +95,7 @@ async fn slow_consumer_drops_messages() {
 
     // Connect publisher
     let mut pub_stream = TcpStream::connect("127.0.0.1:14223").await.unwrap();
+    pub_stream.set_nodelay(true).unwrap();
     pub_stream
         .write_all(&connect_frame().encode())
         .await

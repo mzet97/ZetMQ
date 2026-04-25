@@ -74,6 +74,7 @@ async fn disconnect_removes_subscriptions() {
 
     // Connect subscriber
     let mut sub1 = TcpStream::connect("127.0.0.1:14226").await.unwrap();
+    sub1.set_nodelay(true).unwrap();
     sub1.write_all(&connect_frame().encode()).await.unwrap();
     let _ = read_frame(&mut sub1).await;
     sub1.write_all(&sub_frame("events", 1).encode())
@@ -92,6 +93,7 @@ async fn disconnect_removes_subscriptions() {
 
     // Connect another subscriber and publish — should still work
     let mut sub2 = TcpStream::connect("127.0.0.1:14226").await.unwrap();
+    sub2.set_nodelay(true).unwrap();
     sub2.write_all(&connect_frame().encode()).await.unwrap();
     let _ = read_frame(&mut sub2).await;
     sub2.write_all(&sub_frame("events", 2).encode())
@@ -100,6 +102,7 @@ async fn disconnect_removes_subscriptions() {
     let _ = read_frame(&mut sub2).await;
 
     let mut pub_s = TcpStream::connect("127.0.0.1:14226").await.unwrap();
+    pub_s.set_nodelay(true).unwrap();
     pub_s.write_all(&connect_frame().encode()).await.unwrap();
     let _ = read_frame(&mut pub_s).await;
     pub_s

@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::id::MessageId;
 use crate::subject::Subject;
@@ -19,18 +18,13 @@ pub struct Message {
 
 impl Message {
     pub fn new(subject: Subject, payload: Bytes) -> Self {
-        let timestamp_ns = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-
         Self {
             id: MessageId::new(0),
             subject,
             payload,
             headers: HeaderMap::new(),
             reply_to: None,
-            timestamp_ns,
+            timestamp_ns: 0,
         }
     }
 
@@ -65,7 +59,7 @@ mod tests {
         assert_eq!(msg.subject, subj);
         assert_eq!(msg.payload, payload);
         assert!(msg.reply_to.is_none());
-        assert!(msg.timestamp_ns > 0);
+        assert_eq!(msg.timestamp_ns, 0);
     }
 
     #[test]

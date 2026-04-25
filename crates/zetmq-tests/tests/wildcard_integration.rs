@@ -80,6 +80,7 @@ async fn single_wildcard_matches() {
 
     // Subscriber with orders.*
     let mut sub = TcpStream::connect("127.0.0.1:14224").await.unwrap();
+    sub.set_nodelay(true).unwrap();
     sub.write_all(&connect_frame().encode()).await.unwrap();
     let _ = read_frame(&mut sub).await; // CONNACK
     sub.write_all(&sub_frame("orders.*", 1).encode())
@@ -89,6 +90,7 @@ async fn single_wildcard_matches() {
 
     // Publisher
     let mut pub_s = TcpStream::connect("127.0.0.1:14224").await.unwrap();
+    pub_s.set_nodelay(true).unwrap();
     pub_s.write_all(&connect_frame().encode()).await.unwrap();
     let _ = read_frame(&mut pub_s).await; // CONNACK
     pub_s
@@ -110,6 +112,7 @@ async fn multi_wildcard_matches() {
 
     // Subscriber with orders.>
     let mut sub = TcpStream::connect("127.0.0.1:14225").await.unwrap();
+    sub.set_nodelay(true).unwrap();
     sub.write_all(&connect_frame().encode()).await.unwrap();
     let _ = read_frame(&mut sub).await;
     sub.write_all(&sub_frame("orders.>", 1).encode())
@@ -119,6 +122,7 @@ async fn multi_wildcard_matches() {
 
     // Publisher sends to orders.created.high (multi-level)
     let mut pub_s = TcpStream::connect("127.0.0.1:14225").await.unwrap();
+    pub_s.set_nodelay(true).unwrap();
     pub_s.write_all(&connect_frame().encode()).await.unwrap();
     let _ = read_frame(&mut pub_s).await;
     pub_s

@@ -53,26 +53,36 @@ impl Frame {
             return Ok(None);
         }
 
-        let mut peek = buf.clone();
-        let header = FrameHeader::decode(&mut peek)?;
+        // Peek at lengths without consuming (header_len at bytes 14-17, payload_len at 18-21)
+        let header_len = u32::from_be_bytes([buf[14], buf[15], buf[16], buf[17]]) as usize;
+        let payload_len = u32::from_be_bytes([buf[18], buf[19], buf[20], buf[21]]) as usize;
+        let total = FRAME_HEADER_SIZE + header_len + payload_len;
 
-        let total_size = header.total_frame_size();
-        if total_size > max_frame_size {
+        if total > max_frame_size {
             return Err(ProtocolError::FrameTooLarge {
-                size: total_size,
+                size: total,
                 limit: max_frame_size,
             });
         }
 
-        if buf.len() < total_size {
+        if buf.len() < total {
             return Ok(None);
         }
 
         // Consume header
-        let _ = FrameHeader::decode(buf).unwrap();
+        let mut header_buf = buf.split_to(FRAME_HEADER_SIZE);
+        let header = FrameHeader::decode(&mut header_buf)?;
 
-        let headers = buf.split_to(header.header_len as usize).freeze();
-        let payload = buf.split_to(header.payload_len as usize).freeze();
+        let headers = if header_len > 0 {
+            buf.split_to(header_len).freeze()
+        } else {
+            Bytes::new()
+        };
+        let payload = if payload_len > 0 {
+            buf.split_to(payload_len).freeze()
+        } else {
+            Bytes::new()
+        };
 
         Ok(Some(Self {
             header,

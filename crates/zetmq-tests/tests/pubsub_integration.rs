@@ -82,6 +82,7 @@ async fn test_connect_subscribe_publish_msg() {
     let mut sub_stream = TcpStream::connect("127.0.0.1:14222")
         .await
         .expect("subscriber connect");
+    sub_stream.set_nodelay(true).unwrap();
 
     // Send CONNECT
     let connect = connect_frame();
@@ -109,6 +110,7 @@ async fn test_connect_subscribe_publish_msg() {
     let mut pub_stream = TcpStream::connect("127.0.0.1:14222")
         .await
         .expect("publisher connect");
+    pub_stream.set_nodelay(true).unwrap();
 
     let connect2 = connect_frame();
     pub_stream
