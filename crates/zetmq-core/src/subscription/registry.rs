@@ -6,8 +6,8 @@ use crate::delivery::DeliveryHandle;
 use crate::id::{ConnectionId, SubscriptionId};
 use crate::queue_group::QueueGroupName;
 use crate::routing::RoutingEngine;
-use crate::subscriber::Subscriber;
 use crate::subject_pattern::SubjectPattern;
+use crate::subscriber::Subscriber;
 use crate::subscription::Subscription;
 
 #[derive(Debug)]
@@ -154,7 +154,13 @@ mod tests {
         let conn = ConnectionId::new(1);
         let delivery = Arc::new(FakeDelivery);
 
-        registry.add(SubscriptionId::new(1), conn, pattern("a"), None, delivery.clone());
+        registry.add(
+            SubscriptionId::new(1),
+            conn,
+            pattern("a"),
+            None,
+            delivery.clone(),
+        );
         registry.add(SubscriptionId::new(2), conn, pattern("b"), None, delivery);
 
         let removed = registry.remove_all_for_connection(conn);
@@ -169,7 +175,13 @@ mod tests {
         let conn = ConnectionId::new(1);
         let delivery = Arc::new(FakeDelivery);
 
-        registry.add(SubscriptionId::new(1), conn, pattern("a"), None, delivery.clone());
+        registry.add(
+            SubscriptionId::new(1),
+            conn,
+            pattern("a"),
+            None,
+            delivery.clone(),
+        );
         registry.add(SubscriptionId::new(2), conn, pattern("b"), None, delivery);
 
         assert_eq!(registry.get_by_connection(conn).len(), 2);

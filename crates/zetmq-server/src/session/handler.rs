@@ -58,10 +58,6 @@ pub async fn handle_connection(
 
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<Frame>(config.connection_output_buffer);
 
-    let _delivery = Arc::new(ChannelDelivery {
-        tx: outbound_tx.clone(),
-    });
-
     let mut state = SessionState::New;
     let mut read_buf = BytesMut::with_capacity(4096);
 
@@ -131,10 +127,11 @@ pub async fn handle_connection(
         }
     }
 
-    // Cleanup
+    // Cleanup: remove subscriptions first so broker stops delivering,
+    // then drop the sender to signal the write task to finish.
+    broker.remove_connection(conn_id);
     drop(outbound_tx);
     let _ = write_handle.await;
-    broker.remove_connection(conn_id);
     info!(connection_id = conn_id.0, "disconnected");
 
     Ok(())

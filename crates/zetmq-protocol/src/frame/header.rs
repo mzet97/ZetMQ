@@ -127,9 +127,6 @@ mod tests {
         buf.put_u32(0);
 
         let result = FrameHeader::decode(&mut buf);
-        assert!(matches!(
-            result,
-            Err(ProtocolError::InvalidMagic { .. })
-        ));
+        assert!(matches!(result, Err(ProtocolError::InvalidMagic { .. })));
     }
 }

@@ -20,12 +20,7 @@ impl SubjectTrie {
         Self::default()
     }
 
-    pub fn insert(
-        &mut self,
-        tokens: &[String],
-        sub_id: SubscriptionId,
-        has_multi_wildcard: bool,
-    ) {
+    pub fn insert(&mut self, tokens: &[String], sub_id: SubscriptionId, has_multi_wildcard: bool) {
         let mut node = &mut self.root;
 
         for (i, token) in tokens.iter().enumerate() {
@@ -39,12 +34,7 @@ impl SubjectTrie {
         node.exact_subs.push(sub_id);
     }
 
-    pub fn remove(
-        &mut self,
-        tokens: &[String],
-        sub_id: SubscriptionId,
-        has_multi_wildcard: bool,
-    ) {
+    pub fn remove(&mut self, tokens: &[String], sub_id: SubscriptionId, has_multi_wildcard: bool) {
         let mut node = &mut self.root;
 
         for (i, token) in tokens.iter().enumerate() {

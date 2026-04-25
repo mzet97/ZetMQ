@@ -115,10 +115,7 @@ mod tests {
         let mut buf = BytesMut::from(&encoded[..]);
 
         let result = Frame::decode_from(&mut buf, 10); // limit = 10
-        assert!(matches!(
-            result,
-            Err(ProtocolError::FrameTooLarge { .. })
-        ));
+        assert!(matches!(result, Err(ProtocolError::FrameTooLarge { .. })));
     }
 
     #[test]
