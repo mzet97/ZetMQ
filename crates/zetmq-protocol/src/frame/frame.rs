@@ -39,10 +39,15 @@ impl Frame {
 
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::with_capacity(self.header.total_frame_size());
-        self.header.encode(&mut buf);
+        self.encode_into(&mut buf);
+        buf.freeze()
+    }
+
+    /// Encode directly into an existing buffer without allocation.
+    pub fn encode_into(&self, buf: &mut BytesMut) {
+        self.header.encode(buf);
         buf.extend_from_slice(&self.headers);
         buf.extend_from_slice(&self.payload);
-        buf.freeze()
     }
 
     pub fn decode_from(
