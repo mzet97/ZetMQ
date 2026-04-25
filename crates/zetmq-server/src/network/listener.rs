@@ -11,11 +11,11 @@ use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::session;
 
-#[allow(dead_code)]
 pub struct TcpServer {
     pub config: ServerConfig,
     broker: Arc<BrokerCore>,
     conn_counter: AtomicU64,
+    #[allow(dead_code)] // reserved for graceful shutdown
     shutdown_tx: mpsc::Sender<()>,
 }
 

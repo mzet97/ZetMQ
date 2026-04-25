@@ -1,13 +1,7 @@
-mod config;
-mod error;
-mod network;
-mod runtime;
-mod session;
-
 use std::sync::Arc;
 
-use config::ServerConfig;
-use network::TcpServer;
+use zetmq_server::config::ServerConfig;
+use zetmq_server::network::TcpServer;
 
 #[tokio::main]
 async fn main() {

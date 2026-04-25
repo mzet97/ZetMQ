@@ -3,6 +3,10 @@ name = "zetmq-server"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "zetmq_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "zetmq-server"
 path = "src/main.rs"
