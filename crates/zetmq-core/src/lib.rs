@@ -4,3 +4,4 @@
 pub mod error;
 pub mod id;
 pub mod subject;
+pub mod subject_pattern;
