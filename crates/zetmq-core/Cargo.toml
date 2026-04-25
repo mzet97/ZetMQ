@@ -1,0 +1,11 @@
+[package]
+name = "zetmq-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bytes.workspace = true
+thiserror.workspace = true
+dashmap = "6"
+parking_lot = "0.12"
+tracing.workspace = true

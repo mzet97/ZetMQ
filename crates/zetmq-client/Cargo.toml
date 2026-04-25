@@ -1,0 +1,10 @@
+[package]
+name = "zetmq-client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zetmq-protocol = { path = "../zetmq-protocol" }
+tokio.workspace = true
+bytes.workspace = true
+thiserror.workspace = true

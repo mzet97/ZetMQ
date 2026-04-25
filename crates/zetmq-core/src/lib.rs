@@ -1,0 +1,2 @@
+//! ZetMQ Core - Domain types and broker logic.
+//! This crate has NO dependency on TCP or network I/O.

@@ -1,0 +1,11 @@
+[package]
+name = "zetmq-tests"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zetmq-core = { path = "../zetmq-core" }
+zetmq-protocol = { path = "../zetmq-protocol" }
+zetmq-server = { path = "../zetmq-server" }
+tokio.workspace = true
+bytes.workspace = true
