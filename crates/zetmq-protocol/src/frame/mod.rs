@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 pub mod frame;
 pub mod frame_type;
 pub mod header;
