@@ -8,3 +8,5 @@ pub mod message;
 pub mod queue_group;
 pub mod subject;
 pub mod subject_pattern;
+pub mod subscriber;
+pub mod subscription;
