@@ -1,6 +1,8 @@
+use std::fmt;
+use std::sync::Arc;
+
 use crate::delivery::DeliveryHandle;
 use crate::id::{ConnectionId, SubscriptionId};
-use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Subscriber {
@@ -20,5 +22,14 @@ impl Subscriber {
             subscription_id,
             delivery,
         }
+    }
+}
+
+impl fmt::Debug for Subscriber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Subscriber")
+            .field("connection_id", &self.connection_id)
+            .field("subscription_id", &self.subscription_id)
+            .finish()
     }
 }
