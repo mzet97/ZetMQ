@@ -107,27 +107,31 @@ impl BrokerCore {
             self.deliver_to_subscriber(*sub_id, &message);
         }
 
-        {
-            let groups = self.queue_groups.read();
-            for (pattern, group_name) in queue_groups_map.keys() {
-                if let Some(group_state) = groups.get(&(pattern.clone(), group_name.clone())) {
-                    if !group_state.members.is_empty() {
-                        let idx = group_state.current_index % group_state.members.len();
-                        if let Some(&chosen_id) = group_state.members.get(idx) {
-                            self.deliver_to_subscriber(chosen_id, &message);
+        if !queue_groups_map.is_empty() {
+            {
+                let groups = self.queue_groups.read();
+                for (pattern, group_name) in queue_groups_map.keys() {
+                    if let Some(group_state) = groups.get(&(pattern.clone(), group_name.clone())) {
+                        if !group_state.members.is_empty() {
+                            let idx = group_state.current_index % group_state.members.len();
+                            if let Some(&chosen_id) = group_state.members.get(idx) {
+                                self.deliver_to_subscriber(chosen_id, &message);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        {
-            let mut groups = self.queue_groups.write();
-            for (pattern, group_name) in queue_groups_map.keys() {
-                if let Some(group_state) = groups.get_mut(&(pattern.clone(), group_name.clone())) {
-                    if !group_state.members.is_empty() {
-                        group_state.current_index =
-                            (group_state.current_index + 1) % group_state.members.len();
+            {
+                let mut groups = self.queue_groups.write();
+                for (pattern, group_name) in queue_groups_map.keys() {
+                    if let Some(group_state) =
+                        groups.get_mut(&(pattern.clone(), group_name.clone()))
+                    {
+                        if !group_state.members.is_empty() {
+                            group_state.current_index =
+                                (group_state.current_index + 1) % group_state.members.len();
+                        }
                     }
                 }
             }

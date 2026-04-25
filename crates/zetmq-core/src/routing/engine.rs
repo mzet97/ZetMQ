@@ -99,10 +99,11 @@ impl RoutingEngine {
         }
 
         let wildcard_subs = self.wildcard_trie.read().match_subject(subject);
-        results.extend(wildcard_subs);
-
-        results.sort();
-        results.dedup();
+        for id in wildcard_subs {
+            if !results.contains(&id) {
+                results.push(id);
+            }
+        }
         results
     }
 }
