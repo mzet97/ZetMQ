@@ -92,18 +92,16 @@ impl RoutingEngine {
     }
 
     pub fn match_subject(&self, subject: &Subject) -> Vec<SubscriptionId> {
-        let mut results = Vec::new();
+        let mut results = Vec::with_capacity(8);
 
         if let Some(subs) = self.exact.get(subject.as_str()) {
             results.extend_from_slice(&subs);
         }
 
         let wildcard_subs = self.wildcard_trie.read().match_subject(subject);
-        for id in wildcard_subs {
-            if !results.contains(&id) {
-                results.push(id);
-            }
-        }
+        // Exact and wildcard subscriptions are structurally disjoint (different insert paths),
+        // so a simple extend is safe without dedup
+        results.extend(wildcard_subs);
         results
     }
 }

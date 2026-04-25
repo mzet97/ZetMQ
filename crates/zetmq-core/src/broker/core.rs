@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use parking_lot::RwLock;
 
 use crate::delivery::{DeliveryHandle, DeliveryMessage, DeliveryStatus};
@@ -9,6 +10,8 @@ use crate::message::Message;
 use crate::metrics::CoreMetrics;
 use crate::queue_group::QueueGroupName;
 use crate::routing::RoutingEngine;
+use crate::subject::Subject;
+use crate::error::CoreError;
 use crate::subject_pattern::SubjectPattern;
 use crate::subscription::registry::SubscriptionRegistry;
 
@@ -23,6 +26,7 @@ pub struct BrokerCore {
     metrics: Arc<CoreMetrics>,
     sub_id_gen: IdGenerator,
     queue_groups: RwLock<HashMap<(String, String), QueueGroupState>>,
+    subject_cache: DashMap<String, Subject>,
 }
 
 impl BrokerCore {
@@ -37,7 +41,21 @@ impl BrokerCore {
             metrics,
             sub_id_gen: IdGenerator::new(1),
             queue_groups: RwLock::new(HashMap::new()),
+            subject_cache: DashMap::new(),
         })
+    }
+
+    /// Parse and intern a subject string. Returns a cached Subject for repeated inputs,
+    /// avoiding repeated Arc<str> + Arc<[String]> allocations.
+    pub fn parse_subject(&self, input: &str) -> Result<Subject, CoreError> {
+        if let Some(subj) = self.subject_cache.get(input) {
+            return Ok(subj.clone());
+        }
+        let subj = Subject::parse(input)?;
+        self.subject_cache
+            .entry(input.to_string())
+            .or_insert(subj.clone());
+        Ok(subj)
     }
 
     pub fn subscribe(
@@ -139,22 +157,30 @@ impl BrokerCore {
     }
 
     fn deliver_to_subscriber(&self, sub_id: SubscriptionId, message: &Message) {
-        if let Some(sub_ref) = self.registry.get_subscriber_ref(sub_id) {
-            let delivery_msg = DeliveryMessage {
-                subscription_id: sub_id,
-                connection_id: sub_ref.connection_id,
-                subject: message.subject.clone(),
-                payload: message.payload.clone(),
-                reply_to: message.reply_to.clone(),
+        // Extract needed fields and drop DashMap guard before delivery
+        // to reduce lock hold time under high concurrency
+        let delivery = {
+            let sub_ref = match self.registry.get_subscriber_ref(sub_id) {
+                Some(r) => r,
+                None => return,
             };
+            sub_ref.delivery.clone() // Arc increment
+        }; // DashMap guard dropped HERE
 
-            match sub_ref.delivery.deliver(delivery_msg) {
-                DeliveryStatus::Delivered => {
-                    self.metrics.inc_delivered();
-                }
-                DeliveryStatus::ChannelFull | DeliveryStatus::Failed(_) => {
-                    self.metrics.inc_dropped();
-                }
+        let delivery_msg = DeliveryMessage {
+            subscription_id: sub_id,
+            connection_id: ConnectionId::new(0), // not needed for delivery
+            subject: message.subject.clone(),
+            payload: message.payload.clone(),
+            reply_to: message.reply_to.clone(),
+        };
+
+        match delivery.deliver(delivery_msg) {
+            DeliveryStatus::Delivered => {
+                self.metrics.inc_delivered();
+            }
+            DeliveryStatus::ChannelFull | DeliveryStatus::Failed(_) => {
+                self.metrics.inc_dropped();
             }
         }
     }

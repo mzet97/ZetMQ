@@ -53,12 +53,10 @@ impl SubjectTrie {
 
     pub fn match_subject(&self, subject: &Subject) -> Vec<SubscriptionId> {
         let tokens = subject.tokens();
-        let mut results = Vec::new();
+        let mut results = Vec::with_capacity(8);
 
         Self::match_recursive(&self.root, tokens, 0, &mut results);
 
-        results.sort();
-        results.dedup();
         results
     }
 

@@ -10,6 +10,8 @@ pub use publish::PublishCommand;
 pub use subscribe::SubscribeCommand;
 pub use unsubscribe::UnsubscribeCommand;
 
+use bytes::Bytes;
+
 use crate::error::ProtocolError;
 use crate::frame::{Frame, FrameType};
 
@@ -40,12 +42,16 @@ impl BrokerCommand {
                 if payload.len() < 2 + subj_len {
                     return Err(ProtocolError::DecodingError("PUB subject truncated".into()));
                 }
-                let subject = String::from_utf8_lossy(&payload[2..2 + subj_len]).to_string();
+
+                // Zero-copy: slice subject bytes directly from frame payload
+                let subject = frame.payload.slice(2..2 + subj_len);
+
                 let rest = &payload[2 + subj_len..];
                 let (reply_to, data_start) = if rest.len() >= 2 {
                     let reply_len = u16::from_be_bytes([rest[0], rest[1]]) as usize;
                     if rest.len() >= 2 + reply_len && reply_len > 0 {
-                        let reply = String::from_utf8_lossy(&rest[2..2 + reply_len]).to_string();
+                        let reply_offset = 2 + subj_len + 2;
+                        let reply = frame.payload.slice(reply_offset..reply_offset + reply_len);
                         (Some(reply), 2 + reply_len)
                     } else {
                         (None, 2)
@@ -53,7 +59,15 @@ impl BrokerCommand {
                 } else {
                     (None, 0)
                 };
-                let msg_payload = bytes::Bytes::copy_from_slice(&rest[data_start..]);
+
+                // Zero-copy: slice payload data directly from frame
+                let payload_offset = 2 + subj_len + data_start;
+                let msg_payload = if payload_offset < frame.payload.len() {
+                    frame.payload.slice(payload_offset..)
+                } else {
+                    Bytes::new()
+                };
+
                 Ok(Self::Publish(PublishCommand {
                     subject,
                     payload: msg_payload,
@@ -128,7 +142,7 @@ mod tests {
         let subj_bytes = subject.as_bytes();
         data.extend_from_slice(&(subj_bytes.len() as u16).to_be_bytes());
         data.extend_from_slice(subj_bytes);
-        data.extend_from_slice(&(0u16).to_be_bytes()); // no reply_to
+        data.extend_from_slice(&(0u16.to_be_bytes())); // no reply_to
         data.extend_from_slice(payload);
         Frame::new(FrameType::Pub, 1).with_payload(Bytes::from(data))
     }
@@ -162,7 +176,7 @@ mod tests {
         let cmd = BrokerCommand::from_frame(frame).unwrap();
         match cmd {
             BrokerCommand::Publish(p) => {
-                assert_eq!(p.subject, "orders.created");
+                assert_eq!(&p.subject[..], b"orders.created");
                 assert_eq!(&p.payload[..], b"hello");
             }
             _ => panic!("expected Publish"),
