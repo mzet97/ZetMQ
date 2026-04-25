@@ -80,6 +80,13 @@ impl SubscriptionRegistry {
         self.subscriptions.get(&sub_id).map(|r| r.value().clone())
     }
 
+    pub fn get_ref(
+        &self,
+        sub_id: SubscriptionId,
+    ) -> Option<dashmap::mapref::one::Ref<'_, SubscriptionId, Subscription>> {
+        self.subscriptions.get(&sub_id)
+    }
+
     pub fn get_subscriber(&self, sub_id: SubscriptionId) -> Option<Subscriber> {
         self.subscribers.get(&sub_id).map(|r| r.value().clone())
     }

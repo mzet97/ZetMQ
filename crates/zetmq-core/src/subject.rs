@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::error::CoreError;
 
 const MAX_SUBJECT_LEN: usize = 512;
@@ -5,8 +7,8 @@ const MAX_TOKENS: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Subject {
-    raw: String,
-    tokens: Vec<String>,
+    raw: Arc<str>,
+    tokens: Arc<[String]>,
 }
 
 impl Subject {
@@ -49,8 +51,8 @@ impl Subject {
         }
 
         Ok(Self {
-            raw: trimmed.to_string(),
-            tokens,
+            raw: Arc::from(trimmed),
+            tokens: Arc::from(tokens),
         })
     }
 

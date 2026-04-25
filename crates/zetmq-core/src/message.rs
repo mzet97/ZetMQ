@@ -11,7 +11,7 @@ pub struct Message {
     pub id: MessageId,
     pub subject: Subject,
     pub payload: Bytes,
-    pub headers: HeaderMap,
+    pub headers: Option<HeaderMap>,
     pub reply_to: Option<Subject>,
     pub timestamp_ns: u64,
 }
@@ -22,7 +22,7 @@ impl Message {
             id: MessageId::new(0),
             subject,
             payload,
-            headers: HeaderMap::new(),
+            headers: None,
             reply_to: None,
             timestamp_ns: 0,
         }

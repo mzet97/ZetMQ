@@ -20,9 +20,11 @@ pub struct ChannelDelivery {
 
 impl DeliveryHandle for ChannelDelivery {
     fn deliver(&self, msg: DeliveryMessage) -> DeliveryStatus {
-        // Build MSG frame
-        let mut payload = Vec::new();
+        // Build MSG frame using pre-allocated BytesMut
         let subj_bytes = msg.subject.as_str().as_bytes();
+        let reply_len = msg.reply_to.as_ref().map_or(0, |r| r.as_str().len());
+        let cap = 2 + subj_bytes.len() + 2 + reply_len + 8 + msg.payload.len();
+        let mut payload = BytesMut::with_capacity(cap);
         payload.extend_from_slice(&(subj_bytes.len() as u16).to_be_bytes());
         payload.extend_from_slice(subj_bytes);
 
@@ -38,7 +40,8 @@ impl DeliveryHandle for ChannelDelivery {
         payload.extend_from_slice(&msg.subscription_id.0.to_be_bytes());
         payload.extend_from_slice(&msg.payload);
 
-        let frame = Frame::new(FrameType::Msg, msg.subscription_id.0).with_payload(payload.into());
+        let frame =
+            Frame::new(FrameType::Msg, msg.subscription_id.0).with_payload(payload.freeze());
 
         match self.tx.try_send(frame) {
             Ok(()) => DeliveryStatus::Delivered,

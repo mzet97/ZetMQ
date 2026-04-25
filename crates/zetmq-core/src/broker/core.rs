@@ -90,9 +90,12 @@ impl BrokerCore {
         let mut fanout_subs: Vec<SubscriptionId> = Vec::new();
 
         for sub_id in &sub_ids {
-            if let Some(sub) = self.registry.get(*sub_id) {
-                if let Some(ref qg) = sub.queue_group {
-                    let key = (sub.pattern.as_str().to_string(), qg.as_str().to_string());
+            if let Some(sub_ref) = self.registry.get_ref(*sub_id) {
+                if let Some(ref qg) = sub_ref.queue_group {
+                    let key = (
+                        sub_ref.pattern.as_str().to_string(),
+                        qg.as_str().to_string(),
+                    );
                     queue_groups_map.entry(key).or_default().push(*sub_id);
                 } else {
                     fanout_subs.push(*sub_id);
