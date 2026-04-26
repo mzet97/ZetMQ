@@ -5,13 +5,13 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 
 use crate::delivery::{DeliveryHandle, DeliveryMessage, DeliveryStatus};
+use crate::error::CoreError;
 use crate::id::{ConnectionId, IdGenerator, SubscriptionId};
 use crate::message::Message;
 use crate::metrics::CoreMetrics;
 use crate::queue_group::QueueGroupName;
 use crate::routing::RoutingEngine;
 use crate::subject::Subject;
-use crate::error::CoreError;
 use crate::subject_pattern::SubjectPattern;
 use crate::subscription::registry::SubscriptionRegistry;
 
@@ -104,8 +104,12 @@ impl BrokerCore {
 
         let sub_ids = self.router.match_subject(&message.subject);
 
+        // Single pass: classify subscribers AND pre-extract delivery handles for fanout.
+        // This eliminates the second DashMap lookup that was previously needed in
+        // deliver_to_subscriber for fanout subscribers.
         let mut queue_groups_map: HashMap<(String, String), Vec<SubscriptionId>> = HashMap::new();
-        let mut fanout_subs: Vec<SubscriptionId> = Vec::new();
+        let mut fanout_deliveries: Vec<(SubscriptionId, Arc<dyn DeliveryHandle>)> =
+            Vec::with_capacity(sub_ids.len());
 
         for sub_id in &sub_ids {
             if let Some(sub_ref) = self.registry.get_ref(*sub_id) {
@@ -116,15 +120,33 @@ impl BrokerCore {
                     );
                     queue_groups_map.entry(key).or_default().push(*sub_id);
                 } else {
-                    fanout_subs.push(*sub_id);
+                    // Pre-extract delivery Arc — no second lookup needed
+                    fanout_deliveries.push((*sub_id, sub_ref.delivery.clone()));
+                }
+            }
+        } // All DashMap guards dropped here
+
+        // Deliver fanout directly — zero additional DashMap lookups
+        for (sub_id, delivery) in &fanout_deliveries {
+            let delivery_msg = DeliveryMessage {
+                subscription_id: *sub_id,
+                connection_id: ConnectionId::new(0),
+                subject: message.subject.clone(),
+                payload: message.payload.clone(),
+                reply_to: message.reply_to.clone(),
+                headers: message.headers.clone(),
+            };
+            match delivery.deliver(delivery_msg) {
+                DeliveryStatus::Delivered => {
+                    self.metrics.inc_delivered();
+                }
+                DeliveryStatus::ChannelFull | DeliveryStatus::Failed(_) => {
+                    self.metrics.inc_dropped();
                 }
             }
         }
 
-        for sub_id in &fanout_subs {
-            self.deliver_to_subscriber(*sub_id, &message);
-        }
-
+        // Queue group round-robin — one lookup for chosen member's delivery handle
         if !queue_groups_map.is_empty() {
             {
                 let groups = self.queue_groups.read();
@@ -157,10 +179,10 @@ impl BrokerCore {
     }
 
     fn deliver_to_subscriber(&self, sub_id: SubscriptionId, message: &Message) {
-        // Extract needed fields and drop DashMap guard before delivery
+        // Extract delivery handle and drop DashMap guard before channel send
         // to reduce lock hold time under high concurrency
         let delivery = {
-            let sub_ref = match self.registry.get_subscriber_ref(sub_id) {
+            let sub_ref = match self.registry.get_ref(sub_id) {
                 Some(r) => r,
                 None => return,
             };
@@ -173,6 +195,7 @@ impl BrokerCore {
             subject: message.subject.clone(),
             payload: message.payload.clone(),
             reply_to: message.reply_to.clone(),
+            headers: message.headers.clone(),
         };
 
         match delivery.deliver(delivery_msg) {
@@ -191,6 +214,10 @@ impl BrokerCore {
             self.metrics.dec_subscriptions();
         }
         self.metrics.dec_active_connections();
+    }
+
+    pub fn subscription_count_for_connection(&self, connection_id: ConnectionId) -> usize {
+        self.registry.count_for_connection(connection_id)
     }
 
     pub fn metrics(&self) -> &CoreMetrics {

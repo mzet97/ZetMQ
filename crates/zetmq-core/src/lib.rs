@@ -11,7 +11,6 @@ pub mod queue_group;
 pub mod routing;
 pub mod subject;
 pub mod subject_pattern;
-pub mod subscriber;
 pub mod subscription;
 
 pub use broker::BrokerCore;
@@ -24,5 +23,4 @@ pub use queue_group::QueueGroupName;
 pub use routing::RoutingEngine;
 pub use subject::Subject;
 pub use subject_pattern::SubjectPattern;
-pub use subscriber::Subscriber;
 pub use subscription::Subscription;

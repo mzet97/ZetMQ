@@ -7,5 +7,6 @@ edition.workspace = true
 zetmq-core = { path = "../zetmq-core" }
 zetmq-protocol = { path = "../zetmq-protocol" }
 zetmq-server = { path = "../zetmq-server" }
+zetmq-client = { path = "../zetmq-client" }
 tokio.workspace = true
 bytes.workspace = true

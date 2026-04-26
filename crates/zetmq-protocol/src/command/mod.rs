@@ -34,6 +34,7 @@ impl BrokerCommand {
             }
             FrameType::Pub => {
                 // Payload format: subject_len(2) + subject + [reply_len(2) + reply] + payload
+                // Headers: in frame.headers section (encoded HeaderMap)
                 let payload = &frame.payload;
                 if payload.len() < 2 {
                     return Err(ProtocolError::DecodingError("PUB frame too short".into()));
@@ -68,10 +69,18 @@ impl BrokerCommand {
                     Bytes::new()
                 };
 
+                // Parse headers from frame header section
+                let headers = if !frame.headers.is_empty() {
+                    Some(crate::headers::decode_headers(&frame.headers)?)
+                } else {
+                    None
+                };
+
                 Ok(Self::Publish(PublishCommand {
                     subject,
                     payload: msg_payload,
                     reply_to,
+                    headers,
                 }))
             }
             FrameType::Sub => {

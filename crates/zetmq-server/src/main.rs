@@ -1,11 +1,20 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use zetmq_server::config::ServerConfig;
+use clap::Parser;
 use zetmq_server::network::TcpServer;
 
 fn main() {
-    let config = ServerConfig::default();
+    // Install panic hook that logs instead of crashing the whole process.
+    // Individual task panics are caught by tokio and logged as errors.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("panic in task: {}", info);
+        default_hook(info);
+    }));
+
+    let cli = zetmq_server::config::Cli::parse();
+    let config = cli.resolve();
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -30,8 +39,8 @@ fn main() {
 
     rt.block_on(async move {
         let broker = zetmq_core::BrokerCore::new();
-        let (shutdown_tx, _shutdown_rx) = tokio::sync::mpsc::channel(1);
-        let server = Arc::new(TcpServer::new(config, broker.clone(), shutdown_tx));
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        let server = Arc::new(TcpServer::new(config, broker.clone(), shutdown_tx.clone()));
 
         tracing::info!(
             "ZetMQ server starting on {} ({} worker threads)",
@@ -47,6 +56,16 @@ fn main() {
                 interval.tick().await;
                 metrics_broker.log_metrics();
             }
+        });
+
+        // Graceful shutdown on Ctrl+C
+        let shutdown_signal = shutdown_tx.clone();
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to install Ctrl+C handler");
+            tracing::info!("shutdown signal received (Ctrl+C)");
+            let _ = shutdown_signal.send(());
         });
 
         if let Err(e) = server.run().await {

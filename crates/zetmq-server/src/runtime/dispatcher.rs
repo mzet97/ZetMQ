@@ -6,11 +6,14 @@ use tokio::sync::mpsc;
 use zetmq_core::{BrokerCore, ConnectionId, QueueGroupName, SubjectPattern};
 use zetmq_protocol::{BrokerCommand, Frame, FrameType};
 
+use crate::session::handler::OutboundFrame;
+
 pub fn dispatch(
     broker: &Arc<BrokerCore>,
     conn_id: ConnectionId,
     cmd: BrokerCommand,
-    outbound: &mpsc::Sender<Frame>,
+    correlation_id: u64,
+    outbound: &mpsc::Sender<OutboundFrame>,
 ) {
     match cmd {
         BrokerCommand::Publish(p) => {
@@ -19,7 +22,14 @@ pub fn dispatch(
                 Err(_) => return,
             };
             if let Ok(subject) = broker.parse_subject(subject_str) {
-                let msg = zetmq_core::Message::new(subject, p.payload);
+                let mut msg = zetmq_core::Message::new(subject, p.payload).with_headers(p.headers);
+                if let Some(ref reply_bytes) = p.reply_to {
+                    if let Ok(reply_to) = std::str::from_utf8(reply_bytes) {
+                        if let Ok(reply_subject) = broker.parse_subject(reply_to) {
+                            msg = msg.with_reply_to(reply_subject);
+                        }
+                    }
+                }
                 broker.publish(msg);
             }
         }
@@ -33,8 +43,9 @@ pub fn dispatch(
 
                 let mut payload = BytesMut::with_capacity(8);
                 payload.extend_from_slice(&sub_id.0.to_be_bytes());
-                let ack = Frame::new(FrameType::Suback, sub_id.0).with_payload(payload.freeze());
-                let _ = outbound.try_send(ack);
+                let ack =
+                    Frame::new(FrameType::Suback, correlation_id).with_payload(payload.freeze());
+                let _ = outbound.try_send(OutboundFrame::Raw(ack));
             }
         }
         BrokerCommand::Unsubscribe(u) => {
@@ -44,7 +55,7 @@ pub fn dispatch(
             let mut payload = BytesMut::with_capacity(8);
             payload.extend_from_slice(&sub_id.0.to_be_bytes());
             let ack = Frame::new(FrameType::Unsuback, sub_id.0).with_payload(payload.freeze());
-            let _ = outbound.try_send(ack);
+            let _ = outbound.try_send(OutboundFrame::Raw(ack));
         }
         BrokerCommand::Connect(_) | BrokerCommand::Ping(_) => {
             // Handled in session.rs directly

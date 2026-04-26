@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
 use zetmq_core::BrokerCore;
 use zetmq_protocol::{Frame, FrameType};
@@ -124,7 +124,7 @@ fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
         ..Default::default()
     };
     let broker = BrokerCore::new();
-    let (shutdown_tx, _) = mpsc::channel(1);
+    let (shutdown_tx, _) = broadcast::channel(1);
     let server = Arc::new(TcpServer::new(config, broker.clone(), shutdown_tx));
     let b = broker.clone();
     let handle = tokio::spawn(async move {

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::id::{ConnectionId, SubscriptionId};
 use crate::subject::Subject;
 use bytes::Bytes;
@@ -9,6 +11,7 @@ pub struct DeliveryMessage {
     pub subject: Subject,
     pub payload: Bytes,
     pub reply_to: Option<Subject>,
+    pub headers: Option<HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

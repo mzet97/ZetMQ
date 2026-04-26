@@ -38,6 +38,11 @@ impl Message {
         self
     }
 
+    pub fn with_headers(mut self, headers: Option<HeaderMap>) -> Self {
+        self.headers = headers;
+        self
+    }
+
     pub fn payload_len(&self) -> usize {
         self.payload.len()
     }

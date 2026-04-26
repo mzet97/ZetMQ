@@ -7,14 +7,12 @@ use crate::id::{ConnectionId, SubscriptionId};
 use crate::queue_group::QueueGroupName;
 use crate::routing::RoutingEngine;
 use crate::subject_pattern::SubjectPattern;
-use crate::subscriber::Subscriber;
 use crate::subscription::Subscription;
 
 #[derive(Debug)]
 pub struct SubscriptionRegistry {
     subscriptions: DashMap<SubscriptionId, Subscription>,
     by_connection: DashMap<ConnectionId, Vec<SubscriptionId>>,
-    subscribers: DashMap<SubscriptionId, Subscriber>,
     router: Arc<RoutingEngine>,
 }
 
@@ -23,7 +21,6 @@ impl SubscriptionRegistry {
         Self {
             subscriptions: DashMap::new(),
             by_connection: DashMap::new(),
-            subscribers: DashMap::new(),
             router,
         }
     }
@@ -36,12 +33,10 @@ impl SubscriptionRegistry {
         queue_group: Option<QueueGroupName>,
         delivery: Arc<dyn DeliveryHandle>,
     ) {
-        let sub = Subscription::new(id, connection_id, pattern.clone(), queue_group);
-        let subscriber = Subscriber::new(connection_id, id, delivery);
+        let sub = Subscription::new(id, connection_id, pattern.clone(), queue_group, delivery);
 
         self.router.insert(&pattern, id);
         self.subscriptions.insert(id, sub);
-        self.subscribers.insert(id, subscriber);
         self.by_connection
             .entry(connection_id)
             .or_default()
@@ -51,7 +46,6 @@ impl SubscriptionRegistry {
     pub fn remove(&self, sub_id: SubscriptionId) -> Option<Subscription> {
         let (_, sub) = self.subscriptions.remove(&sub_id)?;
         self.router.remove(&sub.pattern, sub_id);
-        self.subscribers.remove(&sub_id);
         if let Some(mut conn_subs) = self.by_connection.get_mut(&sub.connection_id) {
             conn_subs.retain(|id| *id != sub_id);
         }
@@ -69,7 +63,6 @@ impl SubscriptionRegistry {
         for sub_id in sub_ids {
             if let Some((_, sub)) = self.subscriptions.remove(&sub_id) {
                 self.router.remove(&sub.pattern, sub_id);
-                self.subscribers.remove(&sub_id);
                 removed.push(sub);
             }
         }
@@ -87,17 +80,6 @@ impl SubscriptionRegistry {
         self.subscriptions.get(&sub_id)
     }
 
-    pub fn get_subscriber(&self, sub_id: SubscriptionId) -> Option<Subscriber> {
-        self.subscribers.get(&sub_id).map(|r| r.value().clone())
-    }
-
-    pub fn get_subscriber_ref(
-        &self,
-        sub_id: SubscriptionId,
-    ) -> Option<dashmap::mapref::one::Ref<'_, SubscriptionId, Subscriber>> {
-        self.subscribers.get(&sub_id)
-    }
-
     pub fn get_by_connection(&self, connection_id: ConnectionId) -> Vec<SubscriptionId> {
         self.by_connection
             .get(&connection_id)
@@ -107,6 +89,13 @@ impl SubscriptionRegistry {
 
     pub fn count(&self) -> usize {
         self.subscriptions.len()
+    }
+
+    pub fn count_for_connection(&self, connection_id: ConnectionId) -> usize {
+        self.by_connection
+            .get(&connection_id)
+            .map(|r| r.len())
+            .unwrap_or(0)
     }
 }
 

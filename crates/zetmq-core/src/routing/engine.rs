@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use dashmap::DashMap;
 use parking_lot::RwLock;
 
@@ -10,6 +12,9 @@ use crate::subject_pattern::{PatternToken, SubjectPattern};
 pub struct RoutingEngine {
     exact: DashMap<String, Vec<SubscriptionId>>,
     wildcard_trie: RwLock<SubjectTrie>,
+    /// Fast-path flag: skip wildcard trie traversal when no wildcard subscriptions exist.
+    /// Avoids RwLock acquisition per publish for exact-only workloads.
+    has_wildcards: AtomicBool,
 }
 
 impl Default for RoutingEngine {
@@ -23,6 +28,7 @@ impl RoutingEngine {
         Self {
             exact: DashMap::new(),
             wildcard_trie: RwLock::new(SubjectTrie::new()),
+            has_wildcards: AtomicBool::new(false),
         }
     }
 
@@ -56,6 +62,7 @@ impl RoutingEngine {
             self.wildcard_trie
                 .write()
                 .insert(&tokens, sub_id, has_multi);
+            self.has_wildcards.store(true, Ordering::Release);
         }
     }
 
@@ -88,6 +95,10 @@ impl RoutingEngine {
             self.wildcard_trie
                 .write()
                 .remove(&tokens, sub_id, has_multi);
+            // Note: we don't clear has_wildcards here because checking if the trie
+            // is empty requires a read lock, which would defeat the purpose of the flag.
+            // The flag is conservative: it may stay true even after all wildcards are removed,
+            // but it's never wrong to check the trie.
         }
     }
 
@@ -98,10 +109,15 @@ impl RoutingEngine {
             results.extend_from_slice(&subs);
         }
 
-        let wildcard_subs = self.wildcard_trie.read().match_subject(subject);
-        // Exact and wildcard subscriptions are structurally disjoint (different insert paths),
-        // so a simple extend is safe without dedup
-        results.extend(wildcard_subs);
+        // Fast path: skip trie traversal when no wildcard subscriptions exist.
+        // Avoids RwLock acquisition — a single relaxed atomic load.
+        if self.has_wildcards.load(Ordering::Acquire) {
+            let wildcard_subs = self.wildcard_trie.read().match_subject(subject);
+            // Exact and wildcard subscriptions are structurally disjoint (different insert paths),
+            // so a simple extend is safe without dedup
+            results.extend(wildcard_subs);
+        }
+
         results
     }
 }
@@ -178,5 +194,21 @@ mod tests {
         engine.insert(&pattern("test"), sub);
         engine.remove(&pattern("test"), sub);
         assert!(engine.match_subject(&subject("test")).is_empty());
+    }
+
+    #[test]
+    fn no_wildcards_skips_trie() {
+        let engine = RoutingEngine::new();
+        // Only exact subscriptions — has_wildcards should be false
+        engine.insert(&pattern("orders.created"), SubscriptionId::new(1));
+        assert!(!engine.has_wildcards.load(Ordering::Acquire));
+
+        // Should still match exact
+        let matches = engine.match_subject(&subject("orders.created"));
+        assert_eq!(matches.len(), 1);
+
+        // Now add a wildcard — flag should flip
+        engine.insert(&pattern("orders.*"), SubscriptionId::new(2));
+        assert!(engine.has_wildcards.load(Ordering::Acquire));
     }
 }
