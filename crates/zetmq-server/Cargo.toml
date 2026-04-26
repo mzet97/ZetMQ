@@ -22,3 +22,6 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 thiserror.workspace = true
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+rustls = { version = "0.23", features = ["ring"] }

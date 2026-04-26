@@ -42,6 +42,25 @@ impl Client {
         Self::connect_with_options(opts).await
     }
 
+    /// Connect with token-based authentication.
+    pub async fn connect_with_token(
+        addr: impl Into<String>,
+        token: impl Into<String>,
+    ) -> Result<Self, ClientError> {
+        let opts = ClientOptions::new(addr).with_token(token);
+        Self::connect_with_options(opts).await
+    }
+
+    /// Connect with username/password authentication.
+    pub async fn connect_with_userpass(
+        addr: impl Into<String>,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Result<Self, ClientError> {
+        let opts = ClientOptions::new(addr).with_userpass(username, password);
+        Self::connect_with_options(opts).await
+    }
+
     /// Connect with custom options.
     pub async fn connect_with_options(opts: ClientOptions) -> Result<Self, ClientError> {
         let conn = Connection::connect(&opts).await?;

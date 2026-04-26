@@ -4,7 +4,7 @@ pub mod publish;
 pub mod subscribe;
 pub mod unsubscribe;
 
-pub use connect::ConnectCommand;
+pub use connect::{AuthInfo, ConnectCommand};
 pub use ping::PingCommand;
 pub use publish::PublishCommand;
 pub use subscribe::SubscribeCommand;
@@ -29,7 +29,17 @@ impl BrokerCommand {
         let ft = FrameType::from_u8(frame.header.frame_type)?;
         match ft {
             FrameType::Connect => {
-                let cmd = ConnectCommand::new(frame.header.version);
+                let mut cmd = ConnectCommand::new(frame.header.version);
+                if !frame.payload.is_empty() {
+                    let auth_type = frame.payload[0];
+                    let auth_data = &frame.payload[1..];
+                    match AuthInfo::decode(auth_type, auth_data) {
+                        Ok(auth) => cmd.auth = auth,
+                        Err(e) => {
+                            return Err(ProtocolError::DecodingError(format!("invalid auth: {e}")))
+                        }
+                    }
+                }
                 Ok(Self::Connect(cmd))
             }
             FrameType::Pub => {
@@ -170,11 +180,55 @@ mod tests {
     }
 
     #[test]
-    fn parse_connect() {
+    fn parse_connect_no_auth() {
         let frame = Frame::new(FrameType::Connect, 1);
         let cmd = BrokerCommand::from_frame(frame).unwrap();
         match cmd {
-            BrokerCommand::Connect(c) => assert_eq!(c.protocol_version, 1),
+            BrokerCommand::Connect(c) => {
+                assert_eq!(c.protocol_version, 1);
+                assert_eq!(c.auth, AuthInfo::None);
+            }
+            _ => panic!("expected Connect"),
+        }
+    }
+
+    #[test]
+    fn parse_connect_with_token() {
+        let mut payload = vec![1u8]; // auth_type = token
+        let token = b"secret-token";
+        payload.extend_from_slice(&(token.len() as u16).to_be_bytes());
+        payload.extend_from_slice(token);
+        let frame = Frame::new(FrameType::Connect, 1).with_payload(Bytes::from(payload));
+        let cmd = BrokerCommand::from_frame(frame).unwrap();
+        match cmd {
+            BrokerCommand::Connect(c) => {
+                assert_eq!(c.auth, AuthInfo::Token("secret-token".into()));
+            }
+            _ => panic!("expected Connect"),
+        }
+    }
+
+    #[test]
+    fn parse_connect_with_userpass() {
+        let mut payload = vec![2u8]; // auth_type = userpass
+        let user = b"admin";
+        let pass = b"password123";
+        payload.extend_from_slice(&(user.len() as u16).to_be_bytes());
+        payload.extend_from_slice(user);
+        payload.extend_from_slice(&(pass.len() as u16).to_be_bytes());
+        payload.extend_from_slice(pass);
+        let frame = Frame::new(FrameType::Connect, 1).with_payload(Bytes::from(payload));
+        let cmd = BrokerCommand::from_frame(frame).unwrap();
+        match cmd {
+            BrokerCommand::Connect(c) => {
+                assert_eq!(
+                    c.auth,
+                    AuthInfo::UserPass {
+                        username: "admin".into(),
+                        password: "password123".into(),
+                    }
+                );
+            }
             _ => panic!("expected Connect"),
         }
     }

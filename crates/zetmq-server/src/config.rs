@@ -3,6 +3,75 @@ use std::path::Path;
 use clap::Parser;
 use serde::Deserialize;
 
+/// Authentication configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    /// Auth mode: "none" (default), "token", or "userpass".
+    #[serde(default = "default_auth_type")]
+    pub auth_type: String,
+
+    /// Token for token-based auth.
+    #[serde(default)]
+    pub token: Option<String>,
+
+    /// Users for username/password auth.
+    #[serde(default)]
+    pub users: Vec<UserConfig>,
+}
+
+fn default_auth_type() -> String {
+    "none".into()
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            auth_type: default_auth_type(),
+            token: None,
+            users: Vec::new(),
+        }
+    }
+}
+
+impl AuthConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.auth_type != "none"
+    }
+}
+
+/// A single user in the auth configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UserConfig {
+    pub username: String,
+    pub password: String,
+    #[serde(default)]
+    pub permissions: PermissionsConfig,
+}
+
+/// Permission rules for a user (used in RBAC phase).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PermissionsConfig {
+    #[serde(default)]
+    pub publish: Vec<String>,
+    #[serde(default)]
+    pub subscribe: Vec<String>,
+}
+
+/// TLS configuration.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TlsConfig {
+    /// Path to the PEM-encoded certificate file.
+    pub cert_file: Option<String>,
+    /// Path to the PEM-encoded private key file.
+    pub key_file: Option<String>,
+}
+
+impl TlsConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.cert_file.is_some() && self.key_file.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
     #[serde(default = "default_host")]
@@ -43,6 +112,12 @@ pub struct ServerConfig {
 
     #[serde(default = "default_max_subscriptions_per_connection")]
     pub max_subscriptions_per_connection: usize,
+
+    #[serde(default)]
+    pub auth: AuthConfig,
+
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 fn default_host() -> String {
@@ -101,6 +176,8 @@ impl Default for ServerConfig {
             admin_port: default_admin_port(),
             drain_timeout_secs: default_drain_timeout(),
             max_subscriptions_per_connection: default_max_subscriptions_per_connection(),
+            auth: AuthConfig::default(),
+            tls: TlsConfig::default(),
         }
     }
 }

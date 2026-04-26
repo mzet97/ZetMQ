@@ -69,7 +69,7 @@ async fn test_connect_subscribe_publish_msg() {
 
     let broker = BrokerCore::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(TcpServer::new(config.clone(), broker.clone(), shutdown_tx));
+    let server = Arc::new(TcpServer::new(config.clone(), broker.clone(), shutdown_tx).unwrap());
 
     let server_handle = tokio::spawn(async move {
         let _ = server.run().await;

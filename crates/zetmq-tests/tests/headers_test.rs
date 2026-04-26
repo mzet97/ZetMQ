@@ -15,7 +15,7 @@ async fn spawn_server(port: u16) -> (Arc<TcpServer>, tokio::task::JoinHandle<()>
     };
     let broker = BrokerCore::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(TcpServer::new(config, broker, shutdown_tx));
+    let server = Arc::new(TcpServer::new(config, broker, shutdown_tx).unwrap());
     let handle = tokio::spawn({
         let server = server.clone();
         async move {

@@ -17,7 +17,7 @@ async fn spawn_server_with_config(
 ) {
     let broker = BrokerCore::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(TcpServer::new(config, broker, shutdown_tx.clone()));
+    let server = Arc::new(TcpServer::new(config, broker, shutdown_tx.clone()).unwrap());
     let handle = tokio::spawn({
         let server = server.clone();
         async move {

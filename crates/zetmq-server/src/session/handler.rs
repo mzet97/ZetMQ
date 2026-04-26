@@ -3,17 +3,55 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error_span, info, warn, Instrument};
 
 use zetmq_core::{BrokerCore, ConnectionId, DeliveryHandle, DeliveryMessage, DeliveryStatus};
-use zetmq_protocol::{BrokerCommand, Frame, FrameHeader, FrameType};
+use zetmq_protocol::{AuthInfo, BrokerCommand, Frame, FrameHeader, FrameType};
 
+use super::auth::AuthContext;
 use super::state::SessionState;
 use crate::config::ServerConfig;
 use crate::error::ServerError;
+use crate::network::listener::IoStream;
 use crate::runtime::dispatcher;
+
+/// Validate auth credentials against server config.
+/// Returns Ok(AuthContext) if auth passes, Err(error_message) if it fails.
+fn validate_auth(auth: &AuthInfo, config: &ServerConfig) -> Result<AuthContext, String> {
+    if !config.auth.is_enabled() {
+        return Ok(AuthContext::unrestricted());
+    }
+
+    match config.auth.auth_type.as_str() {
+        "token" => {
+            let expected = config.auth.token.as_deref().unwrap_or("");
+            match auth {
+                AuthInfo::Token(_) if auth == &AuthInfo::Token(expected.to_string()) => {
+                    // Token auth has no per-user permissions — unrestricted within auth
+                    Ok(AuthContext::unrestricted())
+                }
+                _ => Err("authentication failed: invalid token".into()),
+            }
+        }
+        "userpass" => match auth {
+            AuthInfo::UserPass { username, password } => {
+                let user = config
+                    .auth
+                    .users
+                    .iter()
+                    .find(|u| u.username == *username && u.password == *password);
+                if let Some(user) = user {
+                    AuthContext::from_permissions(username.clone(), &user.permissions)
+                } else {
+                    Err("authentication failed: invalid username or password".into())
+                }
+            }
+            _ => Err("authentication failed: username/password required".into()),
+        },
+        _ => Ok(AuthContext::unrestricted()),
+    }
+}
 
 /// Outbound frame types for the write channel.
 ///
@@ -84,7 +122,7 @@ fn encode_outbound(outbound: OutboundFrame, buf: &mut BytesMut) {
 }
 
 pub async fn handle_connection(
-    stream: TcpStream,
+    stream: Box<dyn IoStream>,
     conn_id: ConnectionId,
     broker: Arc<BrokerCore>,
     config: &ServerConfig,
@@ -92,13 +130,14 @@ pub async fn handle_connection(
 ) -> Result<(), ServerError> {
     let span = error_span!("connection", id = conn_id.0);
     async move {
-        let (reader, mut writer) = stream.into_split();
+        let (reader, mut writer) = tokio::io::split(stream);
         let mut reader = tokio::io::BufReader::with_capacity(65536, reader);
 
         let (outbound_tx, mut outbound_rx) =
             mpsc::channel::<OutboundFrame>(config.connection_output_buffer);
 
         let mut state = SessionState::New;
+        let mut auth_ctx = AuthContext::unrestricted();
         let mut read_buf = BytesMut::with_capacity(65536);
         let mut last_activity = Instant::now();
         let heartbeat_interval = std::time::Duration::from_secs(config.heartbeat_interval_secs);
@@ -187,12 +226,31 @@ pub async fn handle_connection(
                         let correlation_id = frame.header.correlation_id;
                         match BrokerCommand::from_frame(frame) {
                             Ok(cmd) => match &cmd {
-                                BrokerCommand::Connect(_) => {
-                                    state = SessionState::Connected;
-                                    broker.metrics().inc_active_connections();
-                                    let ack = OutboundFrame::Raw(Frame::new(FrameType::Connack, 0));
-                                    let _ = outbound_tx.try_send(ack);
-                                    info!("client connected");
+                                BrokerCommand::Connect(cmd) => {
+                                    match validate_auth(&cmd.auth, config) {
+                                        Ok(ctx) => {
+                                            auth_ctx = ctx;
+                                            state = SessionState::Connected;
+                                            broker.metrics().inc_active_connections();
+                                            let ack =
+                                                OutboundFrame::Raw(Frame::new(FrameType::Connack, 0));
+                                            let _ = outbound_tx.try_send(ack);
+                                            if let Some(ref user) = auth_ctx.username {
+                                                info!(user, "client connected");
+                                            } else {
+                                                info!("client connected");
+                                            }
+                                        }
+                                        Err(msg) => {
+                                            warn!(%msg, "auth failed");
+                                            let err_frame = OutboundFrame::Raw(
+                                                Frame::new(FrameType::Error, correlation_id)
+                                                    .with_payload(msg.into_bytes().into()),
+                                            );
+                                            let _ = outbound_tx.try_send(err_frame);
+                                            break;
+                                        }
+                                    }
                                 }
                                 BrokerCommand::Ping(_) => {
                                     let pong = OutboundFrame::Raw(Frame::new(FrameType::Pong, 0));
@@ -204,7 +262,7 @@ pub async fn handle_connection(
                                         continue;
                                     }
                                     // Check max subscriptions per connection before dispatching SUB
-                                    if let BrokerCommand::Subscribe(_) = &cmd {
+                                    if let BrokerCommand::Subscribe(ref s) = &cmd {
                                         let count =
                                             broker.subscription_count_for_connection(conn_id);
                                         if count >= config.max_subscriptions_per_connection {
@@ -226,6 +284,44 @@ pub async fn handle_connection(
                                             );
                                             let _ = outbound_tx.try_send(err_frame);
                                             continue;
+                                        }
+                                        // RBAC: check subscribe permission
+                                        if let Ok(pattern) = zetmq_core::SubjectPattern::parse(&s.subject_pattern) {
+                                            if !auth_ctx.can_subscribe(&pattern) {
+                                                warn!(pattern = %s.subject_pattern, "subscribe denied by RBAC");
+                                                let err_frame = OutboundFrame::Raw(
+                                                    Frame::new(FrameType::Error, correlation_id)
+                                                        .with_payload(
+                                                            "permission denied for subscribe"
+                                                                .to_string()
+                                                                .into_bytes()
+                                                                .into(),
+                                                        ),
+                                                );
+                                                let _ = outbound_tx.try_send(err_frame);
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    // RBAC: check publish permission
+                                    if let BrokerCommand::Publish(ref p) = &cmd {
+                                        if let Ok(subject_str) = std::str::from_utf8(&p.subject) {
+                                            if let Ok(subject) = broker.parse_subject(subject_str) {
+                                                if !auth_ctx.can_publish(&subject) {
+                                                    warn!(subject = subject_str, "publish denied by RBAC");
+                                                    let err_frame = OutboundFrame::Raw(
+                                                        Frame::new(FrameType::Error, correlation_id)
+                                                            .with_payload(
+                                                                "permission denied for publish"
+                                                                    .to_string()
+                                                                    .into_bytes()
+                                                                    .into(),
+                                                            ),
+                                                    );
+                                                    let _ = outbound_tx.try_send(err_frame);
+                                                    continue;
+                                                }
+                                            }
                                         }
                                     }
                                     dispatcher::dispatch(

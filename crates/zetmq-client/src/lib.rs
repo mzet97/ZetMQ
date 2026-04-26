@@ -32,5 +32,5 @@ mod subscription;
 
 pub use client::Client;
 pub use error::ClientError;
-pub use options::ClientOptions;
+pub use options::{ClientAuth, ClientOptions};
 pub use subscription::{Message, Subscription};

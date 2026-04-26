@@ -92,7 +92,7 @@ fn start_server(port: u16, output_buffer: usize) -> (Arc<BrokerCore>, tokio::tas
     };
     let broker = BrokerCore::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(TcpServer::new(config, broker.clone(), shutdown_tx));
+    let server = Arc::new(TcpServer::new(config, broker.clone(), shutdown_tx).unwrap());
     let _b = broker.clone();
     let handle = tokio::spawn(async move {
         let _ = server.run().await;

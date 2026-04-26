@@ -3,15 +3,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, warn};
 
-use zetmq_protocol::{Frame, FrameType};
+use zetmq_protocol::{AuthInfo, Frame, FrameType};
 
 use crate::error::ClientError;
-use crate::options::ClientOptions;
+use crate::options::{ClientAuth, ClientOptions};
 use crate::subscription::Message;
 
 /// Shared state mutated by the read task and queried by the client.
@@ -28,16 +28,101 @@ pub(crate) struct Connection {
     sub_counter: AtomicU64,
 }
 
+/// Build a TLS connector that optionally skips certificate verification.
+fn build_tls_connector(skip_verify: bool) -> Result<tokio_rustls::TlsConnector, ClientError> {
+    let config = if skip_verify {
+        // Dangerous: accept any certificate (for dev/testing only)
+        let cfg = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerifier))
+            .with_no_client_auth();
+        cfg
+    } else {
+        let mut root_store = rustls::RootCertStore::empty();
+        for cert in rustls_native_certs::load_native_certs().certs {
+            root_store.add(cert).ok();
+        }
+        rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth()
+    };
+
+    Ok(tokio_rustls::TlsConnector::from(Arc::new(config)))
+}
+
+/// A certificate verifier that accepts everything (dev/test only).
+#[derive(Debug)]
+struct NoVerifier;
+
+impl rustls::client::danger::ServerCertVerifier for NoVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::ED25519,
+        ]
+    }
+}
+
 impl Connection {
     /// Connect, perform handshake, spawn read/write tasks.
     pub async fn connect(opts: &ClientOptions) -> Result<Self, ClientError> {
-        let stream = tokio::time::timeout(opts.connect_timeout, TcpStream::connect(&opts.addr))
+        let tcp_stream = tokio::time::timeout(opts.connect_timeout, TcpStream::connect(&opts.addr))
             .await
             .map_err(|_| ClientError::ConnectionFailed("connect timeout".into()))??;
 
-        stream.set_nodelay(true)?;
+        tcp_stream.set_nodelay(true)?;
 
-        let (reader, mut writer) = stream.into_split();
+        // Optionally wrap with TLS
+        let (reader, mut writer): (
+            Box<dyn AsyncRead + Unpin + Send>,
+            Box<dyn AsyncWrite + Unpin + Send>,
+        ) = if opts.tls {
+            let connector = build_tls_connector(opts.tls_skip_verify)?;
+            let server_name = rustls::pki_types::ServerName::try_from("localhost")
+                .map_err(|_| ClientError::ConnectionFailed("invalid server name".into()))?;
+            let tls_stream = connector.connect(server_name, tcp_stream).await?;
+            let (r, w) = tokio::io::split(tls_stream);
+            (Box::new(r), Box::new(w))
+        } else {
+            let (r, w) = tcp_stream.into_split();
+            (Box::new(r), Box::new(w))
+        };
+
         let mut reader = tokio::io::BufReader::with_capacity(65536, reader);
 
         // Write task
@@ -63,8 +148,24 @@ impl Connection {
             }
         });
 
-        // Send CONNECT
-        let connect_frame = Frame::new(FrameType::Connect, 0);
+        // Send CONNECT with auth payload
+        let auth_info = match &opts.auth {
+            ClientAuth::None => AuthInfo::None,
+            ClientAuth::Token(t) => AuthInfo::Token(t.clone()),
+            ClientAuth::UserPass { username, password } => AuthInfo::UserPass {
+                username: username.clone(),
+                password: password.clone(),
+            },
+        };
+        let connect_cmd = zetmq_protocol::ConnectCommand {
+            client_name: opts.name.clone(),
+            protocol_version: 1,
+            auth: auth_info,
+        };
+        let mut connect_frame = Frame::new(FrameType::Connect, 0);
+        if let Some(payload) = connect_cmd.encode_payload() {
+            connect_frame = connect_frame.with_payload(payload);
+        }
         write_tx
             .send(connect_frame)
             .await

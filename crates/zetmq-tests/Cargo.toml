@@ -10,3 +10,8 @@ zetmq-server = { path = "../zetmq-server" }
 zetmq-client = { path = "../zetmq-client" }
 tokio.workspace = true
 bytes.workspace = true
+
+[dev-dependencies]
+rcgen = "0.13"
+tempfile = "3"
+rustls = { version = "0.23", features = ["ring"] }
