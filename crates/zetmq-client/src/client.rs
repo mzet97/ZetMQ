@@ -176,6 +176,11 @@ impl Client {
         Ok(())
     }
 
+    /// Send a raw protocol frame (for stream management and advanced use).
+    pub async fn send_frame(&self, frame: Frame) -> Result<(), ClientError> {
+        self.conn.send_frame(frame).await
+    }
+
     // --- Internal ---
 
     async fn publish_with_reply(

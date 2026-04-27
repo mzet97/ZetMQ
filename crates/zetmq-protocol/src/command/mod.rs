@@ -1,12 +1,14 @@
 pub mod connect;
 pub mod ping;
 pub mod publish;
+pub mod stream_cmd;
 pub mod subscribe;
 pub mod unsubscribe;
 
 pub use connect::{AuthInfo, ConnectCommand};
 pub use ping::PingCommand;
 pub use publish::PublishCommand;
+pub use stream_cmd::{AckCommand, CreateStreamCommand, DeleteStreamCommand, NackCommand, StreamInfoResponse};
 pub use subscribe::SubscribeCommand;
 pub use unsubscribe::UnsubscribeCommand;
 
@@ -22,6 +24,10 @@ pub enum BrokerCommand {
     Subscribe(SubscribeCommand),
     Unsubscribe(UnsubscribeCommand),
     Ping(PingCommand),
+    CreateStream(CreateStreamCommand),
+    DeleteStream(DeleteStreamCommand),
+    Ack(AckCommand),
+    Nack(NackCommand),
 }
 
 impl BrokerCommand {
@@ -143,6 +149,26 @@ impl BrokerCommand {
                 }))
             }
             FrameType::Ping => Ok(Self::Ping(PingCommand)),
+            FrameType::CreateStream => {
+                let cmd = CreateStreamCommand::decode(&frame.payload)
+                    .map_err(ProtocolError::DecodingError)?;
+                Ok(Self::CreateStream(cmd))
+            }
+            FrameType::DeleteStream => {
+                let cmd = DeleteStreamCommand::decode(&frame.payload)
+                    .map_err(ProtocolError::DecodingError)?;
+                Ok(Self::DeleteStream(cmd))
+            }
+            FrameType::Ack => {
+                let cmd = AckCommand::decode(&frame.payload)
+                    .map_err(ProtocolError::DecodingError)?;
+                Ok(Self::Ack(cmd))
+            }
+            FrameType::Nack => {
+                let cmd = NackCommand::decode(&frame.payload)
+                    .map_err(ProtocolError::DecodingError)?;
+                Ok(Self::Nack(cmd))
+            }
             _ => Err(ProtocolError::DecodingError(format!(
                 "unexpected frame type for command: {:?}",
                 ft

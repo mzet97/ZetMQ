@@ -1,7 +1,10 @@
 [package]
 name = "zetmq-protocol"
+description = "Binary protocol encoder/decoder for ZetMQ"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 bytes.workspace = true

@@ -66,7 +66,7 @@ async fn disconnect_removes_subscriptions() {
     };
     let broker = BrokerCore::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(TcpServer::new(config, broker.clone(), shutdown_tx).unwrap());
+    let server = Arc::new(TcpServer::new(config, broker.clone(), zetmq_server::store::StoreManager::new(), shutdown_tx).unwrap());
     let server_handle = tokio::spawn(async move {
         let _ = server.run().await;
     });

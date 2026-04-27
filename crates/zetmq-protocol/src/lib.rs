@@ -7,5 +7,5 @@ pub mod frame;
 pub mod headers;
 pub mod version;
 
-pub use command::{AuthInfo, BrokerCommand, ConnectCommand};
+pub use command::{AuthInfo, BrokerCommand, ConnectCommand, AckCommand, CreateStreamCommand, DeleteStreamCommand, NackCommand, StreamInfoResponse};
 pub use frame::{Frame, FrameHeader, FrameType};

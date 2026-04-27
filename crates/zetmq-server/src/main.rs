@@ -39,9 +39,10 @@ fn main() {
 
     rt.block_on(async move {
         let broker = zetmq_core::BrokerCore::new();
+        let store = zetmq_server::store::StoreManager::new();
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
         let server = Arc::new(
-            TcpServer::new(config, broker.clone(), shutdown_tx.clone())
+            TcpServer::new(config, broker.clone(), store.clone(), shutdown_tx.clone())
                 .expect("failed to create server"),
         );
 

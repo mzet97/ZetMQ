@@ -15,6 +15,7 @@ use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::network::listener::IoStream;
 use crate::runtime::dispatcher;
+use crate::store::StoreManager;
 
 /// Validate auth credentials against server config.
 /// Returns Ok(AuthContext) if auth passes, Err(error_message) if it fails.
@@ -125,6 +126,7 @@ pub async fn handle_connection(
     stream: Box<dyn IoStream>,
     conn_id: ConnectionId,
     broker: Arc<BrokerCore>,
+    store: &Arc<StoreManager>,
     config: &ServerConfig,
     mut shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<(), ServerError> {
@@ -326,6 +328,7 @@ pub async fn handle_connection(
                                     }
                                     dispatcher::dispatch(
                                         &broker,
+                                        store,
                                         conn_id,
                                         cmd,
                                         correlation_id,

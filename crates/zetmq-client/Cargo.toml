@@ -1,7 +1,10 @@
 [package]
 name = "zetmq-client"
+description = "Async client library for ZetMQ message broker"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 zetmq-protocol = { path = "../zetmq-protocol" }

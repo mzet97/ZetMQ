@@ -15,6 +15,7 @@ use zetmq_core::{BrokerCore, ConnectionId};
 use crate::config::ServerConfig;
 use crate::error::ServerError;
 use crate::session;
+use crate::store::StoreManager;
 
 /// Build a TLS acceptor from config if TLS is enabled.
 fn build_tls_acceptor(
@@ -56,6 +57,7 @@ fn build_tls_acceptor(
 pub struct TcpServer {
     pub config: ServerConfig,
     broker: Arc<BrokerCore>,
+    store: Arc<StoreManager>,
     conn_counter: AtomicU64,
     active_connections: Arc<AtomicU64>,
     shutdown_tx: broadcast::Sender<()>,
@@ -66,6 +68,7 @@ impl TcpServer {
     pub fn new(
         config: ServerConfig,
         broker: Arc<BrokerCore>,
+        store: Arc<StoreManager>,
         shutdown_tx: broadcast::Sender<()>,
     ) -> Result<Self, ServerError> {
         let tls_acceptor = build_tls_acceptor(&config)?;
@@ -75,6 +78,7 @@ impl TcpServer {
         Ok(Self {
             config,
             broker,
+            store,
             conn_counter: AtomicU64::new(1),
             active_connections: Arc::new(AtomicU64::new(0)),
             shutdown_tx,
@@ -116,6 +120,7 @@ impl TcpServer {
                     info!(connection_id = conn_id.0, peer = %addr, "new connection");
 
                     let broker = self.broker.clone();
+                    let store = self.store.clone();
                     let config = self.config.clone();
                     let shutdown_rx = self.shutdown_tx.subscribe();
                     let active_counter = self.active_connections.clone();
@@ -136,7 +141,7 @@ impl TcpServer {
                         };
 
                     tokio::spawn(async move {
-                        if let Err(e) = session::handle_connection(boxed, conn_id, broker, &config, shutdown_rx).await {
+                        if let Err(e) = session::handle_connection(boxed, conn_id, broker, &store, &config, shutdown_rx).await {
                             warn!(connection_id = conn_id.0, error = %e, "connection error");
                         }
                         active_counter.fetch_sub(1, Ordering::Relaxed);

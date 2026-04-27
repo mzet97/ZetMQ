@@ -5,6 +5,7 @@ members = [
     "crates/zetmq-protocol",
     "crates/zetmq-server",
     "crates/zetmq-client",
+    "crates/zetmq-store",
     "crates/zetmq-bench",
     "crates/zetmq-tests",
 ]
@@ -13,6 +14,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/mzet97/ZetMQ"
 
 [workspace.dependencies]
 bytes = "1"

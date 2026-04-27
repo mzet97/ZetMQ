@@ -32,11 +32,10 @@ pub(crate) struct Connection {
 fn build_tls_connector(skip_verify: bool) -> Result<tokio_rustls::TlsConnector, ClientError> {
     let config = if skip_verify {
         // Dangerous: accept any certificate (for dev/testing only)
-        let cfg = rustls::ClientConfig::builder()
+        rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(NoVerifier))
-            .with_no_client_auth();
-        cfg
+            .with_no_client_auth()
     } else {
         let mut root_store = rustls::RootCertStore::empty();
         for cert in rustls_native_certs::load_native_certs().certs {

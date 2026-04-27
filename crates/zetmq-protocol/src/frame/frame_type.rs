@@ -15,6 +15,13 @@ pub enum FrameType {
     Suback = 0x31,
     Unsub = 0x32,
     Unsuback = 0x33,
+    // Stream management
+    CreateStream = 0x60,
+    StreamInfo = 0x61,
+    DeleteStream = 0x62,
+    // Acknowledgement
+    Ack = 0x50,
+    Nack = 0x51,
     Error = 0xE0,
 }
 
@@ -33,6 +40,11 @@ impl FrameType {
             0x31 => Ok(Self::Suback),
             0x32 => Ok(Self::Unsub),
             0x33 => Ok(Self::Unsuback),
+            0x60 => Ok(Self::CreateStream),
+            0x61 => Ok(Self::StreamInfo),
+            0x62 => Ok(Self::DeleteStream),
+            0x50 => Ok(Self::Ack),
+            0x51 => Ok(Self::Nack),
             0xE0 => Ok(Self::Error),
             _ => Err(ProtocolError::UnknownFrameType(value)),
         }
@@ -62,6 +74,11 @@ mod tests {
             FrameType::Suback,
             FrameType::Unsub,
             FrameType::Unsuback,
+            FrameType::CreateStream,
+            FrameType::StreamInfo,
+            FrameType::DeleteStream,
+            FrameType::Ack,
+            FrameType::Nack,
             FrameType::Error,
         ];
         for ft in types {
