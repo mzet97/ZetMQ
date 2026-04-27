@@ -28,10 +28,89 @@ pub(crate) struct Connection {
     sub_counter: AtomicU64,
 }
 
+const ALLOW_INSECURE_TLS_ENV: &str = "ZETMQ_ALLOW_INSECURE_TLS";
+const TLS_SERVER_NAME_ENV: &str = "ZETMQ_TLS_SERVER_NAME";
+
+fn env_allows_insecure_tls(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .map(|v| v.to_ascii_lowercase())
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn insecure_tls_allowed() -> bool {
+    env_allows_insecure_tls(std::env::var(ALLOW_INSECURE_TLS_ENV).ok().as_deref())
+}
+
+fn env_string(value: Option<&str>) -> Option<String> {
+    value.map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned)
+}
+
+fn extract_host_from_addr(addr: &str) -> Option<&str> {
+    if let Some(rest) = addr.strip_prefix('[') {
+        let end = rest.find(']')?;
+        let host = &rest[..end];
+        let remainder = &rest[end + 1..];
+        if !host.is_empty() && remainder.starts_with(':') && remainder.len() > 1 {
+            return Some(host);
+        }
+        return None;
+    }
+
+    let (host, port) = addr.rsplit_once(':')?;
+    if host.is_empty() || port.is_empty() {
+        return None;
+    }
+    Some(host)
+}
+
+fn resolve_tls_server_name_from_inputs(
+    addr: &str,
+    server_name_override: Option<&str>,
+) -> Result<String, ClientError> {
+    if let Some(server_name) = env_string(server_name_override) {
+        return Ok(server_name);
+    }
+
+    extract_host_from_addr(addr)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            ClientError::ConnectionFailed(format!(
+                "could not derive TLS server name from address `{addr}`; set {TLS_SERVER_NAME_ENV} to override it"
+            ))
+        })
+}
+
+fn resolve_tls_server_name(addr: &str) -> Result<String, ClientError> {
+    let server_name_override = std::env::var(TLS_SERVER_NAME_ENV).ok();
+    let server_name = resolve_tls_server_name_from_inputs(addr, server_name_override.as_deref())?;
+
+    if server_name_override.is_some() {
+        warn!(
+            "Using TLS server name override from {}: {}",
+            TLS_SERVER_NAME_ENV, server_name
+        );
+    }
+
+    Ok(server_name)
+}
+
 /// Build a TLS connector that optionally skips certificate verification.
 fn build_tls_connector(skip_verify: bool) -> Result<tokio_rustls::TlsConnector, ClientError> {
     let config = if skip_verify {
-        // Dangerous: accept any certificate (for dev/testing only)
+        if !insecure_tls_allowed() {
+            return Err(ClientError::ConnectionFailed(format!(
+                "refusing to disable TLS certificate verification; set {ALLOW_INSECURE_TLS_ENV}=1 for development only"
+            )));
+        }
+
+        warn!(
+            "TLS certificate verification is DISABLED via tls_skip_verify=true and {}. This is unsafe and must only be used in development.",
+            ALLOW_INSECURE_TLS_ENV
+        );
+
+        // Dangerous rustls configuration: accept any certificate for local development only.
         rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(NoVerifier))
@@ -97,6 +176,60 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{
+        env_allows_insecure_tls, extract_host_from_addr, resolve_tls_server_name_from_inputs,
+    };
+
+    #[test]
+    fn insecure_tls_env_accepts_truthy_values() {
+        for value in ["1", "true", "TRUE", " yes ", "On"] {
+            assert!(env_allows_insecure_tls(Some(value)));
+        }
+    }
+
+    #[test]
+    fn insecure_tls_env_rejects_missing_or_falsy_values() {
+        for value in [None, Some(""), Some("0"), Some("false"), Some("no"), Some("off")] {
+            assert!(!env_allows_insecure_tls(value));
+        }
+    }
+
+    #[test]
+    fn extract_host_from_addr_supports_hostname_and_ip_formats() {
+        assert_eq!(extract_host_from_addr("example.com:4222"), Some("example.com"));
+        assert_eq!(extract_host_from_addr("127.0.0.1:4222"), Some("127.0.0.1"));
+        assert_eq!(extract_host_from_addr("[::1]:4222"), Some("::1"));
+    }
+
+    #[test]
+    fn resolve_tls_server_name_uses_addr_host_by_default() {
+        let server_name = resolve_tls_server_name_from_inputs("broker.example.com:4222", None)
+            .expect("expected host to be derived from address");
+        assert_eq!(server_name, "broker.example.com");
+    }
+
+    #[test]
+    fn resolve_tls_server_name_prefers_env_override() {
+        let server_name = resolve_tls_server_name_from_inputs(
+            "127.0.0.1:4222",
+            Some("broker.internal.example"),
+        )
+        .expect("expected env override to win");
+        assert_eq!(server_name, "broker.internal.example");
+    }
+
+    #[test]
+    fn resolve_tls_server_name_rejects_invalid_addr_without_override() {
+        let err = resolve_tls_server_name_from_inputs("not-a-socket-address", None)
+            .expect_err("expected invalid address to fail");
+        assert!(err
+            .to_string()
+            .contains("could not derive TLS server name from address"));
+    }
+}
+
 impl Connection {
     /// Connect, perform handshake, spawn read/write tasks.
     pub async fn connect(opts: &ClientOptions) -> Result<Self, ClientError> {
@@ -112,8 +245,9 @@ impl Connection {
             Box<dyn AsyncWrite + Unpin + Send>,
         ) = if opts.tls {
             let connector = build_tls_connector(opts.tls_skip_verify)?;
-            let server_name = rustls::pki_types::ServerName::try_from("localhost")
-                .map_err(|_| ClientError::ConnectionFailed("invalid server name".into()))?;
+            let server_name = resolve_tls_server_name(&opts.addr)?;
+            let server_name = rustls::pki_types::ServerName::try_from(server_name)
+                .map_err(|_| ClientError::ConnectionFailed("invalid TLS server name".into()))?;
             let tls_stream = connector.connect(server_name, tcp_stream).await?;
             let (r, w) = tokio::io::split(tls_stream);
             (Box::new(r), Box::new(w))
@@ -206,6 +340,7 @@ impl Connection {
 
         // Read task
         let read_state = state.clone();
+        let read_write_tx = write_tx.clone();
         let read_handle = tokio::spawn(async move {
             let mut read_buf = BytesMut::with_capacity(65536);
             loop {
@@ -247,8 +382,7 @@ impl Connection {
                             }
                         }
                         FrameType::Ping => {
-                            // Server heartbeat — client should respond with PONG
-                            // For MVP, handled via activity tracking in server
+                            let _ = read_write_tx.send(Frame::new(FrameType::Pong, 0)).await;
                         }
                         FrameType::Error => {
                             let msg = String::from_utf8_lossy(&frame.payload);

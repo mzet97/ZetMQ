@@ -12,6 +12,12 @@ fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+fn enable_insecure_tls_for_test() {
+    // Self-signed certificates in these tests require the explicit development
+    // escape hatch used by the client.
+    unsafe { std::env::set_var("ZETMQ_ALLOW_INSECURE_TLS", "1") };
+}
+
 fn generate_test_certs() -> (Vec<u8>, Vec<u8>) {
     let key_pair = rcgen::KeyPair::generate().unwrap();
     let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
@@ -28,6 +34,7 @@ fn generate_test_certs() -> (Vec<u8>, Vec<u8>) {
 #[tokio::test]
 async fn tls_connect_and_pubsub() {
     install_crypto_provider();
+    enable_insecure_tls_for_test();
     let (cert_pem, key_pem) = generate_test_certs();
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -58,7 +65,8 @@ async fn tls_connect_and_pubsub() {
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Connect with TLS (skip verify since self-signed)
+    // Connect with TLS and explicitly opt into insecure verification bypass for
+    // this self-signed local test certificate.
     let opts = ClientOptions::new("127.0.0.1:15300").with_tls(true);
     let client = Client::connect_with_options(opts).await.unwrap();
 

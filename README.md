@@ -94,6 +94,50 @@ Wildcards are only valid in subscriptions, not in publish subjects.
 | `connection_output_buffer` | 65536 | Outbound channel capacity per connection |
 | `max_frame_size` | 2MB | Maximum frame size in bytes |
 
+## Client TLS
+
+The Rust client validates server certificates by default using the platform
+trust store.
+
+The TLS server name is no longer hardcoded. The client now derives it from the
+host portion of `ClientOptions.addr`, so:
+
+- `broker.example.com:4222` validates against `broker.example.com`
+- `127.0.0.1:4222` validates against `127.0.0.1`
+- `[::1]:4222` validates against `::1`
+
+If you connect using one address but need certificate validation against a
+different DNS name, set `ZETMQ_TLS_SERVER_NAME` explicitly.
+
+For local development with a self-signed certificate, the insecure mode now
+requires a double opt-in:
+
+1. Set `with_tls(true)` on `ClientOptions`.
+2. Set the environment variable `ZETMQ_ALLOW_INSECURE_TLS=1`.
+
+Example:
+
+```bash
+$env:ZETMQ_TLS_SERVER_NAME=localhost
+$env:ZETMQ_ALLOW_INSECURE_TLS=1
+cargo test -p zetmq-tests --test tls_integration
+```
+
+```rust
+use zetmq_client::{Client, ClientOptions};
+
+let opts = ClientOptions::new("127.0.0.1:4222").with_tls(true);
+let client = Client::connect_with_options(opts).await?;
+```
+
+`ZETMQ_TLS_SERVER_NAME` is optional. Use it when `addr` points to an IP,
+localhost tunnel, or proxy, but the certificate is issued to a different
+hostname.
+
+When both are enabled, the client uses rustls dangerous configuration and skips
+certificate verification entirely. This is insecure and must only be used in
+development or test environments. Do not enable it in production.
+
 ## Tests
 
 ```bash

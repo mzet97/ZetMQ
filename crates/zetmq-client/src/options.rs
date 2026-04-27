@@ -27,7 +27,14 @@ pub struct ClientOptions {
     pub auth: ClientAuth,
     /// Enable TLS connection.
     pub tls: bool,
-    /// Accept invalid/self-signed certificates (for development).
+    /// Accept invalid or self-signed server certificates.
+    ///
+    /// This does not take effect by itself. The client will only disable
+    /// certificate verification when the process environment also contains
+    /// `ZETMQ_ALLOW_INSECURE_TLS=1`.
+    ///
+    /// The double opt-in is intentional because this mode disables server
+    /// identity validation and is unsafe for production use.
     pub tls_skip_verify: bool,
 }
 
@@ -74,6 +81,17 @@ impl ClientOptions {
     }
 
     /// Enable TLS with optional certificate verification skip.
+    ///
+    /// Passing `skip_verify = false` enables TLS with normal certificate
+    /// validation against the platform trust store. In that mode, the TLS
+    /// server name is derived automatically from the host portion of `addr`.
+    ///
+    /// Passing `skip_verify = true` is intended only for local development or
+    /// tests that use self-signed certificates. In that mode, the connection
+    /// will still fail unless `ZETMQ_ALLOW_INSECURE_TLS=1` is also set.
+    ///
+    /// If the certificate should be validated against a different DNS name than
+    /// the one present in `addr`, set `ZETMQ_TLS_SERVER_NAME` explicitly.
     pub fn with_tls(mut self, skip_verify: bool) -> Self {
         self.tls = true;
         self.tls_skip_verify = skip_verify;
