@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use tracing::warn;
 
 use crate::delivery::{DeliveryHandle, DeliveryMessage, DeliveryStatus};
 use crate::error::CoreError;
@@ -136,14 +137,7 @@ impl BrokerCore {
                 reply_to: message.reply_to.clone(),
                 headers: message.headers.clone(),
             };
-            match delivery.deliver(delivery_msg) {
-                DeliveryStatus::Delivered => {
-                    self.metrics.inc_delivered();
-                }
-                DeliveryStatus::ChannelFull | DeliveryStatus::Failed(_) => {
-                    self.metrics.inc_dropped();
-                }
-            }
+            self.handle_delivery_status(*sub_id, delivery.deliver(delivery_msg));
         }
 
         // Queue group round-robin — one lookup for chosen member's delivery handle
@@ -198,12 +192,20 @@ impl BrokerCore {
             headers: message.headers.clone(),
         };
 
-        match delivery.deliver(delivery_msg) {
+        self.handle_delivery_status(sub_id, delivery.deliver(delivery_msg));
+    }
+
+    fn handle_delivery_status(&self, sub_id: SubscriptionId, status: DeliveryStatus) {
+        match status {
             DeliveryStatus::Delivered => {
                 self.metrics.inc_delivered();
             }
-            DeliveryStatus::ChannelFull | DeliveryStatus::Failed(_) => {
+            DeliveryStatus::ChannelFull => {
                 self.metrics.inc_dropped();
+            }
+            DeliveryStatus::Failed(error) => {
+                self.metrics.inc_dropped();
+                warn!(%error, ?sub_id, "delivery failed");
             }
         }
     }
@@ -269,6 +271,14 @@ mod tests {
         }
     }
 
+    struct FailingDelivery;
+
+    impl DeliveryHandle for FailingDelivery {
+        fn deliver(&self, _msg: DeliveryMessage) -> DeliveryStatus {
+            DeliveryStatus::Failed("simulated failure".into())
+        }
+    }
+
     fn subject(s: &str) -> Subject {
         Subject::parse(s).unwrap()
     }
@@ -319,6 +329,26 @@ mod tests {
         ));
         assert_eq!(d1.count(), 1);
         assert_eq!(d2.count(), 1);
+    }
+
+    #[test]
+    fn publish_failed_delivery_increments_dropped() {
+        let broker = BrokerCore::new();
+        broker.subscribe(
+            ConnectionId::new(1),
+            pattern("events"),
+            None,
+            Arc::new(FailingDelivery),
+        );
+
+        broker.publish(Message::new(
+            subject("events"),
+            bytes::Bytes::from_static(b"hello"),
+        ));
+
+        let metrics = broker.metrics().snapshot();
+        assert_eq!(metrics.messages_delivered, 0);
+        assert_eq!(metrics.messages_dropped, 1);
     }
 
     #[test]
