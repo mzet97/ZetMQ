@@ -156,7 +156,7 @@ impl ConsumerManager {
         let key = consumer_key(&config.stream, &config.durable_name);
         let mut consumers = self.consumers.write().await;
         if consumers.contains_key(&key) {
-            return Err(StoreError::StreamAlreadyExists(format!(
+            return Err(StoreError::ConsumerAlreadyExists(format!(
                 "consumer {} on stream {}",
                 config.durable_name, config.stream
             )));

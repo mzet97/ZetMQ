@@ -1,4 +1,4 @@
-use zetmq_core::subject_pattern::SubjectPattern;
+use zetmq_core::subject_pattern::{PatternToken, SubjectPattern};
 use zetmq_core::Subject;
 
 use crate::config::PermissionsConfig;
@@ -73,35 +73,44 @@ impl AuthContext {
 }
 
 /// Check if `requested` pattern is covered by `allowed` pattern.
-/// A requested pattern is covered if every subject it matches
-/// is also matched by the allowed pattern.
+/// A requested pattern is covered if every subject it can match is also
+/// matched by the allowed pattern (i.e., allowed is a superset of requested).
+///
+/// Examples:
+/// - `orders.>` covers `orders.*` and `orders.created.high`
+/// - `orders.*` covers `orders.created` but NOT `orders.>` or `orders.a.b`
+/// - `>` covers everything
 fn is_pattern_covered(requested: &SubjectPattern, allowed: &SubjectPattern) -> bool {
-    // The allowed pattern covers the requested one if allowed is a superset.
-    // "orders.>" covers "orders.*" and "orders.created"
-    // "orders.*" covers "orders.created" but not "orders.>"
-    // Full wildcard "> " covers everything.
-    let req_str = requested.as_str();
-    let all_str = allowed.as_str();
+    let req_tokens = requested.tokens();
+    let all_tokens = allowed.tokens();
 
-    // Full wildcard covers everything
-    if all_str == ">" {
-        return true;
+    let mut ri = 0;
+    let mut ai = 0;
+
+    while ai < all_tokens.len() && ri < req_tokens.len() {
+        match (&all_tokens[ai], &req_tokens[ri]) {
+            // Allowed multi-wildcard covers all remaining requested tokens
+            (PatternToken::MultiWildcard, _) => return true,
+            // Allowed single-wildcard covers one requested literal or wildcard token
+            (PatternToken::SingleWildcard, PatternToken::Literal(_))
+            | (PatternToken::SingleWildcard, PatternToken::SingleWildcard) => {
+                ai += 1;
+                ri += 1;
+            }
+            // Allowed single-wildcard does NOT cover a multi-wildcard (broader scope)
+            (PatternToken::SingleWildcard, PatternToken::MultiWildcard) => return false,
+            // Allowed literal matches the same requested literal
+            (PatternToken::Literal(a), PatternToken::Literal(r)) if a == r => {
+                ai += 1;
+                ri += 1;
+            }
+            // Any other mismatch (different literals, literal vs wildcard, etc.)
+            _ => return false,
+        }
     }
 
-    // Exact match
-    if req_str == all_str {
-        return true;
-    }
-
-    // If allowed ends with ".>", check prefix
-    if let Some(prefix) = all_str.strip_suffix(".>") {
-        req_str == prefix || req_str.starts_with(&format!("{prefix}."))
-    } else if let Some(prefix) = all_str.strip_suffix(".*") {
-        // "orders.*" covers exact tokens under orders
-        req_str == prefix || req_str.starts_with(&format!("{prefix}."))
-    } else {
-        false
-    }
+    // Both sequences fully consumed means an exact structural match
+    ai == all_tokens.len() && ri == req_tokens.len()
 }
 
 #[cfg(test)]
@@ -151,6 +160,25 @@ mod tests {
         assert!(ctx.can_subscribe(&pattern("orders.*")));
         assert!(ctx.can_subscribe(&pattern("orders.created")));
         assert!(!ctx.can_subscribe(&pattern("events.>")));
+    }
+
+    #[test]
+    fn star_does_not_cover_multi_wildcard_or_multi_token() {
+        let ctx = AuthContext::from_permissions(
+            "user".into(),
+            &PermissionsConfig {
+                publish: vec![],
+                subscribe: vec!["orders.*".into()],
+            },
+        )
+        .unwrap();
+        // orders.* DOES cover single-token literals
+        assert!(ctx.can_subscribe(&pattern("orders.created")));
+        assert!(ctx.can_subscribe(&pattern("orders.*")));
+        // orders.* does NOT cover orders.> (broader multi-level wildcard)
+        assert!(!ctx.can_subscribe(&pattern("orders.>")));
+        // orders.* does NOT cover multi-token literals
+        assert!(!ctx.can_subscribe(&pattern("orders.created.high")));
     }
 
     #[test]

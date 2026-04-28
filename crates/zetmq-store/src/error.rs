@@ -8,6 +8,9 @@ pub enum StoreError {
     #[error("stream already exists: {0}")]
     StreamAlreadyExists(String),
 
+    #[error("consumer already exists: {0}")]
+    ConsumerAlreadyExists(String),
+
     #[error("invalid offset: expected <= {max}, got {requested}")]
     InvalidOffset { requested: u64, max: u64 },
 

@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -72,7 +74,7 @@ pub struct Stream {
     name: String,
     config: StreamConfig,
     state: StreamState,
-    messages: Vec<StoredMessage>,
+    messages: VecDeque<StoredMessage>,
 }
 
 impl Stream {
@@ -86,7 +88,7 @@ impl Stream {
                 first_seq: 1,
                 last_seq: 0,
             },
-            messages: Vec::new(),
+            messages: VecDeque::new(),
         }
     }
 
@@ -131,7 +133,7 @@ impl Stream {
             headers,
         };
 
-        self.messages.push(msg);
+        self.messages.push_back(msg);
         self.state.last_seq = seq;
         self.state.messages += 1;
         self.state.bytes += msg_bytes;
@@ -157,8 +159,8 @@ impl Stream {
             return Vec::new();
         }
         let start_idx = (s - self.state.first_seq) as usize;
-        let end_idx = (e - self.state.first_seq) as usize;
-        self.messages[start_idx..=end_idx].iter().collect()
+        let count = (e - s + 1) as usize;
+        self.messages.iter().skip(start_idx).take(count).collect()
     }
 
     /// Apply retention policies, removing oldest messages that exceed limits.
@@ -168,7 +170,7 @@ impl Stream {
         // Age-based retention
         if self.config.max_age_secs > 0 {
             let cutoff = now - (self.config.max_age_secs * 1000);
-            while let Some(front) = self.messages.first() {
+            while let Some(front) = self.messages.front() {
                 if front.timestamp < cutoff {
                     self.remove_front();
                 } else {
@@ -193,8 +195,7 @@ impl Stream {
     }
 
     fn remove_front(&mut self) {
-        if !self.messages.is_empty() {
-            let msg = self.messages.remove(0);
+        if let Some(msg) = self.messages.pop_front() {
             self.state.bytes -= msg.payload.len() as u64;
             self.state.messages -= 1;
             self.state.first_seq += 1;

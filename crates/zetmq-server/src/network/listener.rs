@@ -8,7 +8,7 @@ use tokio::net::TcpListener;
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> IoStream for T {}
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use zetmq_core::{BrokerCore, ConnectionId};
 
@@ -170,7 +170,7 @@ impl TcpServer {
                 warn!(active, "drain timeout expired, forcing shutdown");
                 break;
             }
-            info!(active, "waiting for connections to drain...");
+            debug!(active, "waiting for connections to drain...");
             tokio::time::sleep(check_interval).await;
         }
 

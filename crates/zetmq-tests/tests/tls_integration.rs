@@ -12,10 +12,33 @@ fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-fn enable_insecure_tls_for_test() {
-    // Self-signed certificates in these tests require the explicit development
-    // escape hatch used by the client.
-    unsafe { std::env::set_var("ZETMQ_ALLOW_INSECURE_TLS", "1") };
+/// RAII guard that sets an environment variable and restores its previous value
+/// (or removes it) when dropped. Use this in tests to avoid leaking env-var
+/// changes into other tests running in the same process.
+struct EnvVarGuard {
+    key: &'static str,
+    old_value: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let old_value = std::env::var(key).ok();
+        // SAFETY: single-threaded test setup; guard ensures value is restored.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, old_value }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: restoring the env-var to the state it was in before the test.
+        unsafe {
+            match &self.old_value {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 }
 
 fn generate_test_certs() -> (Vec<u8>, Vec<u8>) {
@@ -34,7 +57,7 @@ fn generate_test_certs() -> (Vec<u8>, Vec<u8>) {
 #[tokio::test]
 async fn tls_connect_and_pubsub() {
     install_crypto_provider();
-    enable_insecure_tls_for_test();
+    let _insecure_guard = EnvVarGuard::set("ZETMQ_ALLOW_INSECURE_TLS", "1");
     let (cert_pem, key_pem) = generate_test_certs();
 
     let dir = tempfile::TempDir::new().unwrap();

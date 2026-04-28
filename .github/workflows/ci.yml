@@ -47,7 +47,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --lib --bins
-      - run: cargo test --test "*_integration" --test "*_test" || true
+      - run: cargo test --tests
 
   build:
     name: Build release (${{ matrix.os }})
