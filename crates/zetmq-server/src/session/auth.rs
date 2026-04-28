@@ -182,6 +182,24 @@ mod tests {
     }
 
     #[test]
+    fn multi_wildcard_allowed_covers_multi_token_requested() {
+        let ctx = AuthContext::from_permissions(
+            "user".into(),
+            &PermissionsConfig {
+                publish: vec![],
+                subscribe: vec!["orders.>".into()],
+            },
+        )
+        .unwrap();
+        // orders.> covers deeply nested literals
+        assert!(ctx.can_subscribe(&pattern("orders.a.b.c")));
+        // orders.> covers single-token literals
+        assert!(ctx.can_subscribe(&pattern("orders.created")));
+        // orders.> covers single-wildcard
+        assert!(ctx.can_subscribe(&pattern("orders.*")));
+    }
+
+    #[test]
     fn full_wildcard_covers_all() {
         let ctx = AuthContext::from_permissions(
             "admin".into(),
