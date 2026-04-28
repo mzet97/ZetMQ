@@ -1,0 +1,31 @@
+[package]
+name = "zetmq-server"
+description = "ZetMQ message broker server — high-performance pub/sub with TLS and auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "zetmq_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zetmq-server"
+path = "src/main.rs"
+
+[dependencies]
+zetmq-core = { path = "../zetmq-core" }
+zetmq-protocol = { path = "../zetmq-protocol" }
+zetmq-store = { path = "../zetmq-store" }
+bytes.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+thiserror.workspace = true
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+rustls = { version = "0.23", features = ["ring"] }

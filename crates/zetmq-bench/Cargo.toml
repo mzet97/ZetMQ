@@ -1,0 +1,13 @@
+[package]
+name = "zetmq-bench"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zetmq-core = { path = "../zetmq-core" }
+criterion = "0.5"
+tokio.workspace = true
+
+[[bench]]
+name = "routing_match"
+harness = false
