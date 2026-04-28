@@ -46,7 +46,10 @@ fn insecure_tls_allowed() -> bool {
 }
 
 fn env_string(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned)
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
 }
 
 fn extract_host_from_addr(addr: &str) -> Option<&str> {
@@ -175,60 +178,6 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
             rustls::SignatureScheme::RSA_PSS_SHA384,
             rustls::SignatureScheme::ED25519,
         ]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        env_allows_insecure_tls, extract_host_from_addr, resolve_tls_server_name_from_inputs,
-    };
-
-    #[test]
-    fn insecure_tls_env_accepts_truthy_values() {
-        for value in ["1", "true", "TRUE", " yes ", "On"] {
-            assert!(env_allows_insecure_tls(Some(value)));
-        }
-    }
-
-    #[test]
-    fn insecure_tls_env_rejects_missing_or_falsy_values() {
-        for value in [None, Some(""), Some("0"), Some("false"), Some("no"), Some("off")] {
-            assert!(!env_allows_insecure_tls(value));
-        }
-    }
-
-    #[test]
-    fn extract_host_from_addr_supports_hostname_and_ip_formats() {
-        assert_eq!(extract_host_from_addr("example.com:4222"), Some("example.com"));
-        assert_eq!(extract_host_from_addr("127.0.0.1:4222"), Some("127.0.0.1"));
-        assert_eq!(extract_host_from_addr("[::1]:4222"), Some("::1"));
-    }
-
-    #[test]
-    fn resolve_tls_server_name_uses_addr_host_by_default() {
-        let server_name = resolve_tls_server_name_from_inputs("broker.example.com:4222", None)
-            .expect("expected host to be derived from address");
-        assert_eq!(server_name, "broker.example.com");
-    }
-
-    #[test]
-    fn resolve_tls_server_name_prefers_env_override() {
-        let server_name = resolve_tls_server_name_from_inputs(
-            "127.0.0.1:4222",
-            Some("broker.internal.example"),
-        )
-        .expect("expected env override to win");
-        assert_eq!(server_name, "broker.internal.example");
-    }
-
-    #[test]
-    fn resolve_tls_server_name_rejects_invalid_addr_without_override() {
-        let err = resolve_tls_server_name_from_inputs("not-a-socket-address", None)
-            .expect_err("expected invalid address to fail");
-        assert!(err
-            .to_string()
-            .contains("could not derive TLS server name from address"));
     }
 }
 
@@ -559,5 +508,67 @@ impl Connection {
         if let Some(h) = self.write_handle.take() {
             let _ = h.await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        env_allows_insecure_tls, extract_host_from_addr, resolve_tls_server_name_from_inputs,
+    };
+
+    #[test]
+    fn insecure_tls_env_accepts_truthy_values() {
+        for value in ["1", "true", "TRUE", " yes ", "On"] {
+            assert!(env_allows_insecure_tls(Some(value)));
+        }
+    }
+
+    #[test]
+    fn insecure_tls_env_rejects_missing_or_falsy_values() {
+        for value in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("false"),
+            Some("no"),
+            Some("off"),
+        ] {
+            assert!(!env_allows_insecure_tls(value));
+        }
+    }
+
+    #[test]
+    fn extract_host_from_addr_supports_hostname_and_ip_formats() {
+        assert_eq!(
+            extract_host_from_addr("example.com:4222"),
+            Some("example.com")
+        );
+        assert_eq!(extract_host_from_addr("127.0.0.1:4222"), Some("127.0.0.1"));
+        assert_eq!(extract_host_from_addr("[::1]:4222"), Some("::1"));
+    }
+
+    #[test]
+    fn resolve_tls_server_name_uses_addr_host_by_default() {
+        let server_name = resolve_tls_server_name_from_inputs("broker.example.com:4222", None)
+            .expect("expected host to be derived from address");
+        assert_eq!(server_name, "broker.example.com");
+    }
+
+    #[test]
+    fn resolve_tls_server_name_prefers_env_override() {
+        let server_name =
+            resolve_tls_server_name_from_inputs("127.0.0.1:4222", Some("broker.internal.example"))
+                .expect("expected env override to win");
+        assert_eq!(server_name, "broker.internal.example");
+    }
+
+    #[test]
+    fn resolve_tls_server_name_rejects_invalid_addr_without_override() {
+        let err = resolve_tls_server_name_from_inputs("not-a-socket-address", None)
+            .expect_err("expected invalid address to fail");
+        assert!(err
+            .to_string()
+            .contains("could not derive TLS server name from address"));
     }
 }

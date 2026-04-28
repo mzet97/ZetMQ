@@ -197,8 +197,7 @@ impl ConsumerManager {
         let key = consumer_key(stream, name);
         let consumer = consumers
             .get_mut(&key)
-            .ok_or_else(|| StoreError::StreamNotFound(format!("consumer {name}")))?
-        ;
+            .ok_or_else(|| StoreError::StreamNotFound(format!("consumer {name}")))?;
 
         if consumer.is_backpressured() {
             return Ok(None);

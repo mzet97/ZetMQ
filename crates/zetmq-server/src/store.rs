@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use zetmq_store::{
-    ConsumerConfig, ConsumerManager, MemoryStore, StreamConfig, StreamInfo,
-};
+use zetmq_store::{ConsumerConfig, ConsumerManager, MemoryStore, StreamConfig, StreamInfo};
 
 /// Wrapper around the persistence layer, passed through the server to handlers.
 #[derive(Clone)]
@@ -18,7 +16,11 @@ impl StoreManager {
         Arc::new(Self { store, consumers })
     }
 
-    pub async fn create_stream(&self, name: &str, config: StreamConfig) -> Result<StreamInfo, zetmq_store::StoreError> {
+    pub async fn create_stream(
+        &self,
+        name: &str,
+        config: StreamConfig,
+    ) -> Result<StreamInfo, zetmq_store::StoreError> {
         self.store.create_stream(name, config).await
     }
 
@@ -42,10 +44,15 @@ impl StoreManager {
         payload: bytes::Bytes,
         headers: Option<Vec<(String, String)>>,
     ) -> Result<u64, zetmq_store::StoreError> {
-        self.store.store_message(stream_name, subject, reply_to, payload, headers).await
+        self.store
+            .store_message(stream_name, subject, reply_to, payload, headers)
+            .await
     }
 
-    pub async fn create_consumer(&self, config: ConsumerConfig) -> Result<(), zetmq_store::StoreError> {
+    pub async fn create_consumer(
+        &self,
+        config: ConsumerConfig,
+    ) -> Result<(), zetmq_store::StoreError> {
         self.consumers.create_consumer(config).await
     }
 

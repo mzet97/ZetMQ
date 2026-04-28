@@ -8,7 +8,9 @@ use zetmq_core::BrokerCore;
 use zetmq_server::config::ServerConfig;
 use zetmq_server::network::TcpServer;
 
-async fn start_server(port: u16) -> (
+async fn start_server(
+    port: u16,
+) -> (
     Arc<TcpServer>,
     tokio::task::JoinHandle<()>,
     tempfile::TempDir,
@@ -21,10 +23,7 @@ async fn start_server(port: u16) -> (
     let broker = BrokerCore::new();
     let store = zetmq_server::store::StoreManager::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(
-        TcpServer::new(config, broker, store, shutdown_tx)
-            .unwrap(),
-    );
+    let server = Arc::new(TcpServer::new(config, broker, store, shutdown_tx).unwrap());
     let handle = tokio::spawn({
         let server = server.clone();
         async move {
@@ -42,7 +41,7 @@ async fn create_stream_and_publish() {
     let client = Client::connect("127.0.0.1:15400").await.unwrap();
 
     // Create stream via raw frame
-    use zetmq_protocol::{Frame, FrameType, CreateStreamCommand};
+    use zetmq_protocol::{CreateStreamCommand, Frame, FrameType};
     let create_cmd = CreateStreamCommand {
         name: "orders".into(),
         max_msgs: 100,
@@ -84,7 +83,7 @@ async fn create_duplicate_stream_fails() {
 
     let client = Client::connect("127.0.0.1:15401").await.unwrap();
 
-    use zetmq_protocol::{Frame, FrameType, CreateStreamCommand};
+    use zetmq_protocol::{CreateStreamCommand, Frame, FrameType};
 
     let create_cmd = CreateStreamCommand {
         name: "dup".into(),
@@ -118,7 +117,7 @@ async fn delete_stream() {
 
     let client = Client::connect("127.0.0.1:15402").await.unwrap();
 
-    use zetmq_protocol::{Frame, FrameType, CreateStreamCommand, DeleteStreamCommand};
+    use zetmq_protocol::{CreateStreamCommand, DeleteStreamCommand, Frame, FrameType};
 
     // Create
     let create_cmd = CreateStreamCommand {
@@ -133,7 +132,9 @@ async fn delete_stream() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Delete
-    let delete_cmd = DeleteStreamCommand { name: "temp".into() };
+    let delete_cmd = DeleteStreamCommand {
+        name: "temp".into(),
+    };
     let frame = Frame::new(FrameType::DeleteStream, 2).with_payload(delete_cmd.encode_payload());
     client.send_frame(frame).await.unwrap();
 
@@ -195,7 +196,10 @@ async fn stream_with_retention_limits() {
     // Publish 5 messages
     let mut sub = client.subscribe("limited").await.unwrap();
     for i in 0..5 {
-        client.publish("limited", format!("msg-{i}").as_bytes()).await.unwrap();
+        client
+            .publish("limited", format!("msg-{i}").as_bytes())
+            .await
+            .unwrap();
     }
 
     // Should receive all 5 via pub/sub (retention only affects stored messages)

@@ -1,7 +1,6 @@
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-
 /// Configuration for a stream's retention policy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StreamConfig {
@@ -239,10 +238,7 @@ mod tests {
 
     #[test]
     fn max_msgs_retention() {
-        let mut stream = Stream::new(
-            "test".into(),
-            StreamConfig::default().with_max_msgs(3),
-        );
+        let mut stream = Stream::new("test".into(), StreamConfig::default().with_max_msgs(3));
         for i in 1..=5u8 {
             stream.store("s".into(), None, Bytes::from(vec![i]), None);
         }
@@ -255,10 +251,7 @@ mod tests {
 
     #[test]
     fn max_bytes_retention() {
-        let mut stream = Stream::new(
-            "test".into(),
-            StreamConfig::default().with_max_bytes(10),
-        );
+        let mut stream = Stream::new("test".into(), StreamConfig::default().with_max_bytes(10));
         stream.store("s".into(), None, Bytes::from(vec![0; 4]), None);
         stream.store("s".into(), None, Bytes::from(vec![0; 4]), None);
         stream.store("s".into(), None, Bytes::from(vec![0; 4]), None);

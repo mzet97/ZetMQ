@@ -8,7 +8,9 @@ pub mod unsubscribe;
 pub use connect::{AuthInfo, ConnectCommand};
 pub use ping::PingCommand;
 pub use publish::PublishCommand;
-pub use stream_cmd::{AckCommand, CreateStreamCommand, DeleteStreamCommand, NackCommand, StreamInfoResponse};
+pub use stream_cmd::{
+    AckCommand, CreateStreamCommand, DeleteStreamCommand, NackCommand, StreamInfoResponse,
+};
 pub use subscribe::SubscribeCommand;
 pub use unsubscribe::UnsubscribeCommand;
 
@@ -160,13 +162,13 @@ impl BrokerCommand {
                 Ok(Self::DeleteStream(cmd))
             }
             FrameType::Ack => {
-                let cmd = AckCommand::decode(&frame.payload)
-                    .map_err(ProtocolError::DecodingError)?;
+                let cmd =
+                    AckCommand::decode(&frame.payload).map_err(ProtocolError::DecodingError)?;
                 Ok(Self::Ack(cmd))
             }
             FrameType::Nack => {
-                let cmd = NackCommand::decode(&frame.payload)
-                    .map_err(ProtocolError::DecodingError)?;
+                let cmd =
+                    NackCommand::decode(&frame.payload).map_err(ProtocolError::DecodingError)?;
                 Ok(Self::Nack(cmd))
             }
             _ => Err(ProtocolError::DecodingError(format!(

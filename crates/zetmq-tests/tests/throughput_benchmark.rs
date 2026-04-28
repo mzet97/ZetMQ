@@ -125,7 +125,15 @@ fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
     };
     let broker = BrokerCore::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(TcpServer::new(config, broker.clone(), zetmq_server::store::StoreManager::new(), shutdown_tx).unwrap());
+    let server = Arc::new(
+        TcpServer::new(
+            config,
+            broker.clone(),
+            zetmq_server::store::StoreManager::new(),
+            shutdown_tx,
+        )
+        .unwrap(),
+    );
     let b = broker.clone();
     let handle = tokio::spawn(async move {
         let _ = server.run().await;
@@ -214,14 +222,11 @@ async fn bench_pubsub_throughput() {
     let received_clone = received.clone();
     let reader = tokio::spawn(async move {
         let mut buf = BytesMut::with_capacity(131072);
-        loop {
-            match read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await {
-                Some(frame) => {
-                    if frame.frame_type().ok() == Some(FrameType::Msg) {
-                        received_clone.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                None => break, // timeout or EOF
+        while let Some(frame) =
+            read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await
+        {
+            if frame.frame_type().ok() == Some(FrameType::Msg) {
+                received_clone.fetch_add(1, Ordering::Relaxed);
             }
         }
     });
@@ -295,14 +300,11 @@ async fn bench_fanout_throughput() {
         let counter = total_received.clone();
         let handle = tokio::spawn(async move {
             let mut buf = BytesMut::with_capacity(131072);
-            loop {
-                match read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await {
-                    Some(frame) => {
-                        if frame.frame_type().ok() == Some(FrameType::Msg) {
-                            counter.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    None => break,
+            while let Some(frame) =
+                read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await
+            {
+                if frame.frame_type().ok() == Some(FrameType::Msg) {
+                    counter.fetch_add(1, Ordering::Relaxed);
                 }
             }
         });
@@ -380,14 +382,11 @@ async fn bench_many_subjects_throughput() {
     let received_clone = received.clone();
     let reader = tokio::spawn(async move {
         let mut buf = BytesMut::with_capacity(131072);
-        loop {
-            match read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await {
-                Some(frame) => {
-                    if frame.frame_type().ok() == Some(FrameType::Msg) {
-                        received_clone.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                None => break,
+        while let Some(frame) =
+            read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await
+        {
+            if frame.frame_type().ok() == Some(FrameType::Msg) {
+                received_clone.fetch_add(1, Ordering::Relaxed);
             }
         }
     });

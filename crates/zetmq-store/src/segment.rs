@@ -74,7 +74,10 @@ impl Segment {
         let subject_bytes = subject.as_bytes();
         let reply_bytes = reply_to.map(|r| r.as_bytes());
 
-        let record_size = 8 + 8 + 2 + subject_bytes.len()
+        let record_size = 8
+            + 8
+            + 2
+            + subject_bytes.len()
             + 2
             + reply_bytes.map_or(0, |r| r.len())
             + 4
@@ -172,7 +175,12 @@ impl Segment {
                 break;
             }
             let subject_len = u16::from_be_bytes(slen) as usize;
-            if self.file.seek(SeekFrom::Current(subject_len as i64)).await.is_err() {
+            if self
+                .file
+                .seek(SeekFrom::Current(subject_len as i64))
+                .await
+                .is_err()
+            {
                 break;
             }
 
@@ -193,7 +201,12 @@ impl Segment {
             }
             let payload_len = u32::from_be_bytes(plen) as i64;
 
-            if self.file.seek(SeekFrom::Current(payload_len)).await.is_err() {
+            if self
+                .file
+                .seek(SeekFrom::Current(payload_len))
+                .await
+                .is_err()
+            {
                 break;
             }
 
@@ -280,9 +293,7 @@ mod tests {
         let mut seg = Segment::open(&path, 1).await.unwrap();
 
         for i in 0u8..10 {
-            seg.append("s", None, &[i], 1000 + i as u64)
-                .await
-                .unwrap();
+            seg.append("s", None, &[i], 1000 + i as u64).await.unwrap();
         }
 
         assert_eq!(seg.len(), 10);
@@ -299,9 +310,7 @@ mod tests {
         {
             let mut seg = Segment::open(&path, 1).await.unwrap();
             for i in 0u8..5 {
-                seg.append("s", Some("reply"), &[i], 2000)
-                    .await
-                    .unwrap();
+                seg.append("s", Some("reply"), &[i], 2000).await.unwrap();
             }
         }
 

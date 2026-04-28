@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::error::StoreError;
-use crate::stream::{Stream, StreamConfig, StreamInfo, StoredMessage};
+use crate::stream::{StoredMessage, Stream, StreamConfig, StreamInfo};
 
 /// Thread-safe in-memory store backed by per-stream `Stream` instances.
 #[derive(Clone)]
@@ -20,7 +20,11 @@ impl MemoryStore {
     }
 
     /// Create a new stream. Returns error if it already exists.
-    pub async fn create_stream(&self, name: &str, config: StreamConfig) -> Result<StreamInfo, StoreError> {
+    pub async fn create_stream(
+        &self,
+        name: &str,
+        config: StreamConfig,
+    ) -> Result<StreamInfo, StoreError> {
         let mut streams = self.streams.write().await;
         if streams.contains_key(name) {
             return Err(StoreError::StreamAlreadyExists(name.to_string()));
@@ -143,7 +147,10 @@ mod tests {
     #[tokio::test]
     async fn duplicate_stream() {
         let store = MemoryStore::new();
-        store.create_stream("x", StreamConfig::default()).await.unwrap();
+        store
+            .create_stream("x", StreamConfig::default())
+            .await
+            .unwrap();
         let err = store.create_stream("x", StreamConfig::default()).await;
         assert!(matches!(err, Err(StoreError::StreamAlreadyExists(_))));
     }
@@ -162,7 +169,10 @@ mod tests {
     #[tokio::test]
     async fn delete_stream() {
         let store = MemoryStore::new();
-        store.create_stream("del", StreamConfig::default()).await.unwrap();
+        store
+            .create_stream("del", StreamConfig::default())
+            .await
+            .unwrap();
         store.delete_stream("del").await.unwrap();
         assert!(store.stream_info("del").await.is_err());
     }
@@ -170,8 +180,14 @@ mod tests {
     #[tokio::test]
     async fn list_streams() {
         let store = MemoryStore::new();
-        store.create_stream("a", StreamConfig::default()).await.unwrap();
-        store.create_stream("b", StreamConfig::default()).await.unwrap();
+        store
+            .create_stream("a", StreamConfig::default())
+            .await
+            .unwrap();
+        store
+            .create_stream("b", StreamConfig::default())
+            .await
+            .unwrap();
         let list = store.list_streams().await;
         assert_eq!(list.len(), 2);
     }

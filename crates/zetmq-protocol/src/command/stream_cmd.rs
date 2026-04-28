@@ -100,7 +100,8 @@ impl AckCommand {
             return Err("payload too short".into());
         }
         let stream = String::from_utf8_lossy(&payload[1..1 + name_len]).to_string();
-        let sequence = u64::from_be_bytes(payload[1 + name_len..1 + name_len + 8].try_into().unwrap());
+        let sequence =
+            u64::from_be_bytes(payload[1 + name_len..1 + name_len + 8].try_into().unwrap());
         Ok(Self { stream, sequence })
     }
 }
@@ -132,7 +133,8 @@ impl NackCommand {
             return Err("payload too short".into());
         }
         let stream = String::from_utf8_lossy(&payload[1..1 + name_len]).to_string();
-        let sequence = u64::from_be_bytes(payload[1 + name_len..1 + name_len + 8].try_into().unwrap());
+        let sequence =
+            u64::from_be_bytes(payload[1 + name_len..1 + name_len + 8].try_into().unwrap());
         Ok(Self { stream, sequence })
     }
 }
@@ -212,7 +214,9 @@ mod tests {
 
     #[test]
     fn delete_stream_roundtrip() {
-        let cmd = DeleteStreamCommand { name: "orders".into() };
+        let cmd = DeleteStreamCommand {
+            name: "orders".into(),
+        };
         let payload = cmd.encode_payload();
         let decoded = DeleteStreamCommand::decode(&payload).unwrap();
         assert_eq!(decoded.name, "orders");
@@ -220,7 +224,10 @@ mod tests {
 
     #[test]
     fn ack_roundtrip() {
-        let cmd = AckCommand { stream: "orders".into(), sequence: 42 };
+        let cmd = AckCommand {
+            stream: "orders".into(),
+            sequence: 42,
+        };
         let payload = cmd.encode_payload();
         let decoded = AckCommand::decode(&payload).unwrap();
         assert_eq!(decoded.stream, "orders");

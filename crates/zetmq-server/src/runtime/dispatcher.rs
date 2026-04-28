@@ -5,9 +5,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use zetmq_core::{BrokerCore, ConnectionId, QueueGroupName, SubjectPattern};
-use zetmq_protocol::{
-    BrokerCommand, Frame, FrameType, StreamInfoResponse,
-};
+use zetmq_protocol::{BrokerCommand, Frame, FrameType, StreamInfoResponse};
 
 use crate::session::handler::OutboundFrame;
 use crate::store::StoreManager;
@@ -27,7 +25,8 @@ pub fn dispatch(
                 Err(_) => return,
             };
             if let Ok(subject) = broker.parse_subject(subject_str) {
-                let mut msg = zetmq_core::Message::new(subject, p.payload.clone()).with_headers(p.headers);
+                let mut msg =
+                    zetmq_core::Message::new(subject, p.payload.clone()).with_headers(p.headers);
                 if let Some(ref reply_bytes) = p.reply_to {
                     if let Ok(reply_to) = std::str::from_utf8(reply_bytes) {
                         if let Ok(reply_subject) = broker.parse_subject(reply_to) {
@@ -75,30 +74,31 @@ pub fn dispatch(
 
             tokio::spawn(async move {
                 let result = store.create_stream(&name, config).await;
-                let frame = match result {
-                    Ok(info) => {
-                        let resp = StreamInfoResponse {
-                            name: info.name,
-                            messages: info.state.messages,
-                            bytes: info.state.bytes,
-                            first_seq: info.state.first_seq,
-                            last_seq: info.state.last_seq,
-                            max_msgs: info.config.max_msgs,
-                            max_bytes: info.config.max_bytes,
-                            max_age_secs: info.config.max_age_secs,
-                        };
-                        OutboundFrame::Raw(
-                            Frame::new(FrameType::StreamInfo, 0).with_payload(resp.encode_payload()),
-                        )
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "create stream failed");
-                        OutboundFrame::Raw(
-                            Frame::new(FrameType::Error, 0)
-                                .with_payload(format!("create stream error: {e}").into_bytes().into()),
-                        )
-                    }
-                };
+                let frame =
+                    match result {
+                        Ok(info) => {
+                            let resp = StreamInfoResponse {
+                                name: info.name,
+                                messages: info.state.messages,
+                                bytes: info.state.bytes,
+                                first_seq: info.state.first_seq,
+                                last_seq: info.state.last_seq,
+                                max_msgs: info.config.max_msgs,
+                                max_bytes: info.config.max_bytes,
+                                max_age_secs: info.config.max_age_secs,
+                            };
+                            OutboundFrame::Raw(
+                                Frame::new(FrameType::StreamInfo, 0)
+                                    .with_payload(resp.encode_payload()),
+                            )
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "create stream failed");
+                            OutboundFrame::Raw(Frame::new(FrameType::Error, 0).with_payload(
+                                format!("create stream error: {e}").into_bytes().into(),
+                            ))
+                        }
+                    };
                 let _ = outbound.try_send(frame);
             });
         }
@@ -109,19 +109,19 @@ pub fn dispatch(
 
             tokio::spawn(async move {
                 let result = store.delete_stream(&name).await;
-                let frame = match result {
-                    Ok(()) => {
-                        info!(stream = %name, "stream deleted");
-                        OutboundFrame::Raw(Frame::new(FrameType::StreamInfo, 0))
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "delete stream failed");
-                        OutboundFrame::Raw(
-                            Frame::new(FrameType::Error, 0)
-                                .with_payload(format!("delete stream error: {e}").into_bytes().into()),
-                        )
-                    }
-                };
+                let frame =
+                    match result {
+                        Ok(()) => {
+                            info!(stream = %name, "stream deleted");
+                            OutboundFrame::Raw(Frame::new(FrameType::StreamInfo, 0))
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "delete stream failed");
+                            OutboundFrame::Raw(Frame::new(FrameType::Error, 0).with_payload(
+                                format!("delete stream error: {e}").into_bytes().into(),
+                            ))
+                        }
+                    };
                 let _ = outbound.try_send(frame);
             });
         }

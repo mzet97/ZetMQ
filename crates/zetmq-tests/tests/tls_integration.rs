@@ -56,7 +56,15 @@ async fn tls_connect_and_pubsub() {
     };
     let broker = BrokerCore::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(TcpServer::new(config, broker, zetmq_server::store::StoreManager::new(), shutdown_tx.clone()).unwrap());
+    let server = Arc::new(
+        TcpServer::new(
+            config,
+            broker,
+            zetmq_server::store::StoreManager::new(),
+            shutdown_tx.clone(),
+        )
+        .unwrap(),
+    );
     let handle = tokio::spawn({
         let server = server.clone();
         async move {
@@ -107,7 +115,15 @@ async fn tls_reject_non_tls_client() {
     };
     let broker = BrokerCore::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(TcpServer::new(config, broker, zetmq_server::store::StoreManager::new(), shutdown_tx.clone()).unwrap());
+    let server = Arc::new(
+        TcpServer::new(
+            config,
+            broker,
+            zetmq_server::store::StoreManager::new(),
+            shutdown_tx.clone(),
+        )
+        .unwrap(),
+    );
     let handle = tokio::spawn({
         let server = server.clone();
         async move {
@@ -139,7 +155,15 @@ async fn no_tls_plain_connection_works() {
     };
     let broker = BrokerCore::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(TcpServer::new(config, broker, zetmq_server::store::StoreManager::new(), shutdown_tx.clone()).unwrap());
+    let server = Arc::new(
+        TcpServer::new(
+            config,
+            broker,
+            zetmq_server::store::StoreManager::new(),
+            shutdown_tx.clone(),
+        )
+        .unwrap(),
+    );
     let handle = tokio::spawn({
         let server = server.clone();
         async move {
