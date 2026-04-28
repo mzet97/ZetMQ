@@ -23,9 +23,11 @@ struct ConnState {
 }
 
 pub(crate) struct Connection {
-    pub write_tx: mpsc::Sender<Frame>,
+    write_tx: Option<mpsc::Sender<Frame>>,
     state: Arc<Mutex<ConnState>>,
     sub_counter: AtomicU64,
+    read_handle: Option<tokio::task::JoinHandle<()>>,
+    write_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 const ALLOW_INSECURE_TLS_ENV: &str = "ZETMQ_ALLOW_INSECURE_TLS";
@@ -307,7 +309,12 @@ impl Connection {
         // Wait for CONNACK
         let mut handshake_buf = BytesMut::with_capacity(4096);
         let connack = loop {
-            reader.read_buf(&mut handshake_buf).await?;
+            let n = reader.read_buf(&mut handshake_buf).await?;
+            if n == 0 {
+                return Err(ClientError::ConnectionFailed(
+                    "connection closed before CONNACK".into(),
+                ));
+            }
             match Frame::decode_from(&mut handshake_buf, opts.max_frame_size) {
                 Ok(Some(frame)) => {
                     let ft = FrameType::from_u8(frame.header.frame_type)
@@ -399,13 +406,12 @@ impl Connection {
             }
         });
 
-        // Keep handles alive
-        let _ = (write_handle, read_handle);
-
         Ok(Self {
-            write_tx,
+            write_tx: Some(write_tx),
             state,
             sub_counter: AtomicU64::new(1),
+            read_handle: Some(read_handle),
+            write_handle: Some(write_handle),
         })
     }
 
@@ -506,6 +512,8 @@ impl Connection {
         }
 
         self.write_tx
+            .as_ref()
+            .ok_or(ClientError::Disconnected)?
             .send(frame)
             .await
             .map_err(|_| ClientError::Disconnected)?;
@@ -531,8 +539,25 @@ impl Connection {
     /// Send a frame to the write task.
     pub async fn send_frame(&self, frame: Frame) -> Result<(), ClientError> {
         self.write_tx
+            .as_ref()
+            .ok_or(ClientError::Disconnected)?
             .send(frame)
             .await
             .map_err(|_| ClientError::Disconnected)
+    }
+
+    /// Close the connection: shut down background tasks and release resources.
+    pub async fn close(&mut self) {
+        // Drop the write channel to signal the write task to finish
+        self.write_tx.take();
+        // Abort the read task
+        if let Some(h) = self.read_handle.take() {
+            h.abort();
+            let _ = h.await;
+        }
+        // Wait for write task to drain and finish
+        if let Some(h) = self.write_handle.take() {
+            let _ = h.await;
+        }
     }
 }

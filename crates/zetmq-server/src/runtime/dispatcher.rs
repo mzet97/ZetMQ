@@ -60,7 +60,8 @@ pub fn dispatch(
 
             let mut payload = BytesMut::with_capacity(8);
             payload.extend_from_slice(&sub_id.0.to_be_bytes());
-            let ack = Frame::new(FrameType::Unsuback, sub_id.0).with_payload(payload.freeze());
+            let ack =
+                Frame::new(FrameType::Unsuback, correlation_id).with_payload(payload.freeze());
             let _ = outbound.try_send(OutboundFrame::Raw(ack));
         }
         BrokerCommand::CreateStream(cmd) => {

@@ -171,8 +171,7 @@ impl Client {
             return Ok(());
         }
         self.closed = true;
-        // Drop the write channel to signal the write task to finish
-        // Connection will be cleaned up when it goes out of scope
+        self.conn.close().await;
         Ok(())
     }
 

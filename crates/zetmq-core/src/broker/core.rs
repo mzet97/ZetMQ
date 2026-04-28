@@ -212,6 +212,27 @@ impl BrokerCore {
 
     pub fn remove_connection(&self, connection_id: ConnectionId) {
         let removed = self.registry.remove_all_for_connection(connection_id);
+
+        // Clean up queue group entries for removed subscriptions
+        if !removed.is_empty() {
+            let removed_ids: Vec<SubscriptionId> = removed.iter().map(|s| s.id).collect();
+            let mut groups = self.queue_groups.write();
+            for sub in &removed {
+                if let Some(ref qg) = sub.queue_group {
+                    let key = (sub.pattern.as_str().to_string(), qg.as_str().to_string());
+                    if let Some(group) = groups.get_mut(&key) {
+                        group.members.retain(|id| !removed_ids.contains(id));
+                        if group.current_index >= group.members.len() {
+                            group.current_index = 0;
+                        }
+                        if group.members.is_empty() {
+                            groups.remove(&key);
+                        }
+                    }
+                }
+            }
+        }
+
         for _ in &removed {
             self.metrics.dec_subscriptions();
         }

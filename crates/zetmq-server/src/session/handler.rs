@@ -369,7 +369,9 @@ pub async fn handle_connection(
         // then drop the sender to signal the write task to finish.
         broker.remove_connection(conn_id);
         drop(outbound_tx);
-        let _ = write_handle.await;
+        if let Err(err) = write_handle.await {
+            warn!(?err, "write task terminated unexpectedly");
+        }
         info!("disconnected");
 
         Ok(())
