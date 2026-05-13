@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 zetmq-core = { path = "../zetmq-core" }
-criterion = "0.5"
+criterion = "0.8"
 tokio.workspace = true
 
 [[bench]]
