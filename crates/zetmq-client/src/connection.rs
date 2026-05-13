@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -20,12 +21,15 @@ struct ConnState {
     subscriptions: HashMap<u64, mpsc::Sender<Message>>,
     /// Client correlation_id → oneshot to deliver server sub_id
     pending_subs: HashMap<u64, oneshot::Sender<u64>>,
+    /// Client correlation_id → oneshot resolved when a matching PONG arrives.
+    pending_flush: HashMap<u64, oneshot::Sender<()>>,
 }
 
 pub(crate) struct Connection {
     write_tx: Option<mpsc::Sender<Frame>>,
     state: Arc<Mutex<ConnState>>,
     sub_counter: AtomicU64,
+    connected: Arc<AtomicBool>,
     read_handle: Option<tokio::task::JoinHandle<()>>,
     write_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -211,6 +215,8 @@ impl Connection {
 
         // Write task
         let (write_tx, mut write_rx) = mpsc::channel::<Frame>(256);
+        let connected = Arc::new(AtomicBool::new(true));
+        let write_connected = connected.clone();
         let write_handle = tokio::spawn(async move {
             let mut buf = BytesMut::with_capacity(65536);
             while let Some(frame) = write_rx.recv().await {
@@ -223,13 +229,16 @@ impl Connection {
                     }
                 }
                 if writer.write_all(&buf).await.is_err() {
+                    write_connected.store(false, Ordering::Release);
                     break;
                 }
                 if writer.flush().await.is_err() {
+                    write_connected.store(false, Ordering::Release);
                     break;
                 }
                 buf.clear();
             }
+            write_connected.store(false, Ordering::Release);
         });
 
         // Send CONNECT with auth payload
@@ -292,11 +301,13 @@ impl Connection {
         let state = Arc::new(Mutex::new(ConnState {
             subscriptions: HashMap::new(),
             pending_subs: HashMap::new(),
+            pending_flush: HashMap::new(),
         }));
 
         // Read task
         let read_state = state.clone();
         let read_write_tx = write_tx.clone();
+        let read_connected = connected.clone();
         let read_handle = tokio::spawn(async move {
             let mut read_buf = BytesMut::with_capacity(65536);
             loop {
@@ -340,6 +351,9 @@ impl Connection {
                         FrameType::Ping => {
                             let _ = read_write_tx.send(Frame::new(FrameType::Pong, 0)).await;
                         }
+                        FrameType::Pong => {
+                            Self::resolve_flush(&read_state, frame.header.correlation_id).await;
+                        }
                         FrameType::Error => {
                             let msg = String::from_utf8_lossy(&frame.payload);
                             warn!("server error: {msg}");
@@ -353,15 +367,33 @@ impl Connection {
                     }
                 }
             }
+            read_connected.store(false, Ordering::Release);
         });
 
         Ok(Self {
             write_tx: Some(write_tx),
             state,
             sub_counter: AtomicU64::new(1),
+            connected,
             read_handle: Some(read_handle),
             write_handle: Some(write_handle),
         })
+    }
+
+    async fn resolve_flush(state: &Arc<Mutex<ConnState>>, corr_id: u64) {
+        let mut st = state.lock().await;
+        let tx = if corr_id == 0 {
+            st.pending_flush
+                .keys()
+                .min()
+                .copied()
+                .and_then(|id| st.pending_flush.remove(&id))
+        } else {
+            st.pending_flush.remove(&corr_id)
+        };
+        if let Some(tx) = tx {
+            let _ = tx.send(());
+        }
     }
 
     /// Decode a MSG frame and dispatch to the right subscription.
@@ -444,6 +476,11 @@ impl Connection {
         self.sub_counter.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Whether both background tasks still consider the connection alive.
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Acquire)
+    }
+
     /// Send a SUB frame and wait for SUBACK to get the server-assigned sub_id.
     /// Registers the subscription channel under the server-assigned ID.
     pub async fn subscribe_send(
@@ -495,8 +532,43 @@ impl Connection {
             .map_err(|_| ClientError::Disconnected)
     }
 
+    /// Send a PING and wait for a server PONG.
+    pub async fn flush(&self, timeout: Duration) -> Result<(), ClientError> {
+        let corr_id = self.next_sub_id();
+        let (flush_tx, flush_rx) = oneshot::channel();
+
+        {
+            let mut st = self.state.lock().await;
+            st.pending_flush.insert(corr_id, flush_tx);
+        }
+
+        if let Err(err) = self.send_frame(Frame::new(FrameType::Ping, corr_id)).await {
+            let mut st = self.state.lock().await;
+            st.pending_flush.remove(&corr_id);
+            return Err(err);
+        }
+
+        match tokio::time::timeout(timeout, flush_rx).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(ClientError::Disconnected),
+            Err(_) => {
+                let mut st = self.state.lock().await;
+                st.pending_flush.remove(&corr_id);
+                Err(ClientError::Timeout)
+            }
+        }
+    }
+
+    /// Replace this connection with a freshly connected one.
+    pub async fn reconnect(&mut self, opts: &ClientOptions) -> Result<(), ClientError> {
+        self.close().await;
+        *self = Self::connect(opts).await?;
+        Ok(())
+    }
+
     /// Close the connection: shut down background tasks and release resources.
     pub async fn close(&mut self) {
+        self.connected.store(false, Ordering::Release);
         // Drop the write channel to signal the write task to finish
         self.write_tx.take();
         // Abort the read task

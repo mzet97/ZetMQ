@@ -36,6 +36,14 @@ pub struct ClientOptions {
     /// The double opt-in is intentional because this mode disables server
     /// identity validation and is unsafe for production use.
     pub tls_skip_verify: bool,
+    /// Enable automatic reconnect for persistent subscriptions.
+    pub reconnect_enabled: bool,
+    /// Maximum reconnect attempts per disconnect event (default: 10).
+    pub max_reconnect_attempts: usize,
+    /// Initial reconnect delay (default: 1s).
+    pub reconnect_delay: std::time::Duration,
+    /// Apply exponential backoff between reconnect attempts.
+    pub reconnect_backoff: bool,
 }
 
 impl Default for ClientOptions {
@@ -49,6 +57,10 @@ impl Default for ClientOptions {
             auth: ClientAuth::None,
             tls: false,
             tls_skip_verify: false,
+            reconnect_enabled: false,
+            max_reconnect_attempts: 10,
+            reconnect_delay: std::time::Duration::from_secs(1),
+            reconnect_backoff: true,
         }
     }
 }
@@ -95,6 +107,30 @@ impl ClientOptions {
     pub fn with_tls(mut self, skip_verify: bool) -> Self {
         self.tls = true;
         self.tls_skip_verify = skip_verify;
+        self
+    }
+
+    /// Enable or disable automatic reconnect for persistent subscriptions.
+    pub fn with_reconnect(mut self, enabled: bool) -> Self {
+        self.reconnect_enabled = enabled;
+        self
+    }
+
+    /// Set the maximum reconnect attempts per disconnect event.
+    pub fn with_max_reconnect_attempts(mut self, attempts: usize) -> Self {
+        self.max_reconnect_attempts = attempts;
+        self
+    }
+
+    /// Set the initial reconnect delay.
+    pub fn with_reconnect_delay(mut self, delay: std::time::Duration) -> Self {
+        self.reconnect_delay = delay;
+        self
+    }
+
+    /// Enable or disable exponential reconnect backoff.
+    pub fn with_reconnect_backoff(mut self, enabled: bool) -> Self {
+        self.reconnect_backoff = enabled;
         self
     }
 }

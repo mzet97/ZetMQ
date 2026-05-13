@@ -146,6 +146,7 @@ pub async fn handle_connection(
         let heartbeat_timeout = std::time::Duration::from_secs(config.heartbeat_timeout_secs);
         let drain_timeout = std::time::Duration::from_secs(config.drain_timeout_secs);
         let mut heartbeat_ticker = tokio::time::interval(heartbeat_interval);
+        let sub_consumers = crate::runtime::dispatcher::SubConsumerMap::new();
 
         // Write task: encodes frames directly into a shared buffer, avoiding
         // per-frame BytesMut allocations for MSG deliveries.
@@ -333,6 +334,7 @@ pub async fn handle_connection(
                                         cmd,
                                         correlation_id,
                                         &outbound_tx,
+                                        &sub_consumers,
                                     );
                                 }
                             },

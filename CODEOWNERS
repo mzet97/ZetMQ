@@ -1,0 +1,35 @@
+# CODEOWNERS
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+* @mzet97
+
+# --- Domain logic: broker core, routing, subscriptions ---
+/crates/zetmq-core/ @mzet97
+
+# --- Wire protocol: frame codec, commands ---
+/crates/zetmq-protocol/ @mzet97
+
+# --- Stream persistence: store, segments, consumers ---
+/crates/zetmq-store/ @mzet97
+
+# --- Server: TCP accept loop, session handler, dispatcher, admin ---
+/crates/zetmq-server/ @mzet97
+
+# --- Client SDK ---
+/crates/zetmq-client/ @mzet97
+
+# --- Benchmarks ---
+/crates/zetmq-bench/ @mzet97
+
+# --- Integration tests ---
+/crates/zetmq-tests/ @mzet97
+
+# --- CI/CD pipelines ---
+/.github/workflows/ @mzet97
+
+# --- Security policy ---
+/SECURITY.md @mzet97
+
+# --- Architecture decisions ---
+/docs/decisions/ @mzet97

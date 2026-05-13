@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
-use tokio::sync::mpsc;
-use tracing::info;
+use tokio::sync::{mpsc, Mutex};
+use tracing::{info, warn};
 
 use zetmq_protocol::headers::encode_headers;
 use zetmq_protocol::{Frame, FrameType};
@@ -27,12 +28,20 @@ const DEFAULT_SUB_BUFFER: usize = 256;
 /// client.close().await?;
 /// ```
 pub struct Client {
-    conn: Connection,
-    #[allow(dead_code)]
+    conn: Arc<Mutex<Connection>>,
     opts: ClientOptions,
+    subscriptions: Arc<Mutex<HashMap<u64, ActiveSubscription>>>,
     inbox_prefix: String,
     reply_counter: AtomicU64,
-    closed: bool,
+    closed: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+struct ActiveSubscription {
+    subject: String,
+    queue_group: Option<String>,
+    server_sub_id: u64,
+    tx: mpsc::Sender<Message>,
 }
 
 impl Client {
@@ -65,12 +74,26 @@ impl Client {
     pub async fn connect_with_options(opts: ClientOptions) -> Result<Self, ClientError> {
         let conn = Connection::connect(&opts).await?;
         info!("connected to {}", opts.addr);
+        let conn = Arc::new(Mutex::new(conn));
+        let subscriptions = Arc::new(Mutex::new(HashMap::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+
+        if opts.reconnect_enabled {
+            Self::spawn_reconnect_loop(
+                conn.clone(),
+                opts.clone(),
+                subscriptions.clone(),
+                closed.clone(),
+            );
+        }
+
         Ok(Self {
             conn,
             opts,
+            subscriptions,
             inbox_prefix: generate_inbox_prefix(),
             reply_counter: AtomicU64::new(0),
-            closed: false,
+            closed,
         })
     }
 
@@ -101,24 +124,37 @@ impl Client {
         subject: &str,
         queue_group: Option<&str>,
     ) -> Result<Subscription, ClientError> {
-        let corr_id = self.conn.next_sub_id();
+        self.subscribe_internal(subject, queue_group, true).await
+    }
 
-        // Build SUB frame payload: pattern_len(1) + pattern + [qg_len(1) + qg]
-        let mut data = Vec::new();
-        let pattern_bytes = subject.as_bytes();
-        data.push(pattern_bytes.len() as u8);
-        data.extend_from_slice(pattern_bytes);
-        if let Some(qg) = queue_group {
-            let qg_bytes = qg.as_bytes();
-            data.push(qg_bytes.len() as u8);
-            data.extend_from_slice(qg_bytes);
-        }
+    async fn subscribe_internal(
+        &self,
+        subject: &str,
+        queue_group: Option<&str>,
+        track_reconnect: bool,
+    ) -> Result<Subscription, ClientError> {
+        self.ensure_connected().await?;
+        let conn = self.conn.lock().await;
+        let corr_id = conn.next_sub_id();
 
-        let frame = Frame::new(FrameType::Sub, corr_id).with_payload(Bytes::from(data));
+        let frame = Self::build_sub_frame(subject, queue_group, corr_id);
         let (tx, rx) = mpsc::channel(DEFAULT_SUB_BUFFER);
 
         // Send SUB and wait for SUBACK to get the server-assigned sub_id
-        let server_sub_id = self.conn.subscribe_send(corr_id, frame, tx).await?;
+        let server_sub_id = conn.subscribe_send(corr_id, frame, tx.clone()).await?;
+
+        if track_reconnect {
+            let mut subscriptions = self.subscriptions.lock().await;
+            subscriptions.insert(
+                server_sub_id,
+                ActiveSubscription {
+                    subject: subject.to_owned(),
+                    queue_group: queue_group.map(str::to_owned),
+                    server_sub_id,
+                    tx,
+                },
+            );
+        }
 
         Ok(Subscription {
             id: server_sub_id,
@@ -128,11 +164,20 @@ impl Client {
 
     /// Unsubscribe from a subscription.
     pub async fn unsubscribe(&self, sub: &Subscription) -> Result<(), ClientError> {
+        let server_sub_id = {
+            let mut subscriptions = self.subscriptions.lock().await;
+            subscriptions
+                .remove(&sub.id)
+                .map(|active| active.server_sub_id)
+                .unwrap_or(sub.id)
+        };
+
         let mut data = Vec::with_capacity(8);
-        data.extend_from_slice(&sub.id.to_be_bytes());
-        let frame = Frame::new(FrameType::Unsub, sub.id).with_payload(Bytes::from(data));
-        self.conn.send_frame(frame).await?;
-        self.conn.remove_subscription(sub.id).await;
+        data.extend_from_slice(&server_sub_id.to_be_bytes());
+        let frame = Frame::new(FrameType::Unsub, server_sub_id).with_payload(Bytes::from(data));
+        let conn = self.conn.lock().await;
+        conn.send_frame(frame).await?;
+        conn.remove_subscription(server_sub_id).await;
         Ok(())
     }
 
@@ -147,7 +192,7 @@ impl Client {
         let reply_subject = format!("{}.{}", self.inbox_prefix, reply_id);
 
         // Subscribe to the specific reply subject
-        let mut reply_sub = self.subscribe(&reply_subject).await?;
+        let mut reply_sub = self.subscribe_internal(&reply_subject, None, false).await?;
 
         // Publish with reply_to
         self.publish_with_reply(subject, Some(&reply_subject), payload, None)
@@ -167,17 +212,27 @@ impl Client {
 
     /// Close the connection.
     pub async fn close(&mut self) -> Result<(), ClientError> {
-        if self.closed {
+        if self.closed.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        self.closed = true;
-        self.conn.close().await;
+        self.conn.lock().await.close().await;
         Ok(())
+    }
+
+    /// Send a PING and wait for PONG, confirming the server processed prior frames.
+    pub async fn flush(&self) -> Result<(), ClientError> {
+        self.ensure_connected().await?;
+        self.conn
+            .lock()
+            .await
+            .flush(self.opts.request_timeout)
+            .await
     }
 
     /// Send a raw protocol frame (for stream management and advanced use).
     pub async fn send_frame(&self, frame: Frame) -> Result<(), ClientError> {
-        self.conn.send_frame(frame).await
+        self.ensure_connected().await?;
+        self.conn.lock().await.send_frame(frame).await
     }
 
     // --- Internal ---
@@ -212,6 +267,125 @@ impl Client {
             frame = frame.with_headers(header_buf.freeze());
         }
 
-        self.conn.send_frame(frame).await
+        self.ensure_connected().await?;
+        self.conn.lock().await.send_frame(frame).await
+    }
+
+    fn build_sub_frame(subject: &str, queue_group: Option<&str>, corr_id: u64) -> Frame {
+        // Build SUB frame payload: pattern_len(1) + pattern + [qg_len(1) + qg]
+        let mut data = Vec::new();
+        let pattern_bytes = subject.as_bytes();
+        data.push(pattern_bytes.len() as u8);
+        data.extend_from_slice(pattern_bytes);
+        if let Some(qg) = queue_group {
+            let qg_bytes = qg.as_bytes();
+            data.push(qg_bytes.len() as u8);
+            data.extend_from_slice(qg_bytes);
+        }
+
+        Frame::new(FrameType::Sub, corr_id).with_payload(Bytes::from(data))
+    }
+
+    async fn ensure_connected(&self) -> Result<(), ClientError> {
+        if !self.opts.reconnect_enabled || self.conn.lock().await.is_connected() {
+            return Ok(());
+        }
+
+        Self::reconnect_once(&self.conn, &self.opts, &self.subscriptions, false).await
+    }
+
+    fn spawn_reconnect_loop(
+        conn: Arc<Mutex<Connection>>,
+        opts: ClientOptions,
+        subscriptions: Arc<Mutex<HashMap<u64, ActiveSubscription>>>,
+        closed: Arc<AtomicBool>,
+    ) {
+        tokio::spawn(async move {
+            while !closed.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                if closed.load(Ordering::Acquire) || conn.lock().await.is_connected() {
+                    continue;
+                }
+
+                warn!("connection lost; attempting reconnect to {}", opts.addr);
+                if let Err(err) = Self::reconnect_once(&conn, &opts, &subscriptions, true).await {
+                    warn!("reconnect attempts exhausted: {err}");
+                }
+            }
+        });
+    }
+
+    async fn reconnect_once(
+        conn: &Arc<Mutex<Connection>>,
+        opts: &ClientOptions,
+        subscriptions: &Arc<Mutex<HashMap<u64, ActiveSubscription>>>,
+        wait_first: bool,
+    ) -> Result<(), ClientError> {
+        let mut delay = opts.reconnect_delay;
+        let mut last_error = ClientError::Disconnected;
+
+        for attempt in 0..opts.max_reconnect_attempts {
+            if wait_first || attempt > 0 {
+                tokio::time::sleep(delay).await;
+            }
+
+            let mut conn_guard = conn.lock().await;
+            if conn_guard.is_connected() {
+                return Ok(());
+            }
+
+            match conn_guard.reconnect(opts).await {
+                Ok(()) => {
+                    Self::replay_subscriptions(&conn_guard, subscriptions).await?;
+                    info!("reconnected to {}", opts.addr);
+                    return Ok(());
+                }
+                Err(err) => {
+                    last_error = err;
+                    warn!(
+                        attempt = attempt + 1,
+                        max = opts.max_reconnect_attempts,
+                        "reconnect attempt failed"
+                    );
+                }
+            }
+            drop(conn_guard);
+
+            if opts.reconnect_backoff {
+                delay = delay.saturating_mul(2);
+            }
+        }
+
+        Err(last_error)
+    }
+
+    async fn replay_subscriptions(
+        conn: &Connection,
+        subscriptions: &Arc<Mutex<HashMap<u64, ActiveSubscription>>>,
+    ) -> Result<(), ClientError> {
+        let active_subscriptions: Vec<(u64, ActiveSubscription)> = {
+            let subscriptions = subscriptions.lock().await;
+            subscriptions
+                .iter()
+                .map(|(stable_id, active)| (*stable_id, active.clone()))
+                .collect()
+        };
+
+        let mut remapped = Vec::with_capacity(active_subscriptions.len());
+        for (stable_id, active) in active_subscriptions {
+            let corr_id = conn.next_sub_id();
+            let frame =
+                Self::build_sub_frame(&active.subject, active.queue_group.as_deref(), corr_id);
+            let server_sub_id = conn.subscribe_send(corr_id, frame, active.tx).await?;
+            remapped.push((stable_id, server_sub_id));
+        }
+
+        let mut subscriptions = subscriptions.lock().await;
+        for (stable_id, server_sub_id) in remapped {
+            if let Some(active) = subscriptions.get_mut(&stable_id) {
+                active.server_sub_id = server_sub_id;
+            }
+        }
+        Ok(())
     }
 }

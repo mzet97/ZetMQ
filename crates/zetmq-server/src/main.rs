@@ -40,6 +40,7 @@ fn main() {
     rt.block_on(async move {
         let broker = zetmq_core::BrokerCore::new();
         let store = zetmq_server::store::StoreManager::new();
+        let admin_port = config.admin_port;
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
         let server = Arc::new(
             TcpServer::new(config, broker.clone(), store.clone(), shutdown_tx.clone())
@@ -51,6 +52,12 @@ fn main() {
             server.addr(),
             worker_threads
         );
+
+        let admin_broker = broker.clone();
+        let admin_store = store.clone();
+        tokio::spawn(async move {
+            zetmq_server::admin::run_admin_server(admin_broker, admin_store, admin_port).await;
+        });
 
         // Periodic metrics logging
         let metrics_broker = broker;
