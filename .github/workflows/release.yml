@@ -248,7 +248,7 @@ jobs:
           format: table
 
       - name: GitHub provenance attestation
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/${{ github.repository }}/zetmq-server
           subject-digest: ${{ steps.push.outputs.digest }}
