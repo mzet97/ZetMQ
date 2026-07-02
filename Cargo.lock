@@ -1724,7 +1724,7 @@ checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
 
 [[package]]
 name = "zetmq-bench"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "criterion",
  "tokio",
@@ -1733,7 +1733,7 @@ dependencies = [
 
 [[package]]
 name = "zetmq-client"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "rand",
@@ -1749,7 +1749,7 @@ dependencies = [
 
 [[package]]
 name = "zetmq-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "dashmap",
@@ -1761,7 +1761,7 @@ dependencies = [
 
 [[package]]
 name = "zetmq-protocol"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "thiserror",
@@ -1769,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "zetmq-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "clap",
@@ -1790,7 +1790,7 @@ dependencies = [
 
 [[package]]
 name = "zetmq-store"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "memmap2",
@@ -1804,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "zetmq-tests"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "rcgen",

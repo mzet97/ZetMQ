@@ -18,8 +18,10 @@ RUN mkdir -p crates/zetmq-protocol/src && echo "" > crates/zetmq-protocol/src/li
  && mkdir -p crates/zetmq-core/src && echo "" > crates/zetmq-core/src/lib.rs \
  && mkdir -p crates/zetmq-store/src && echo "" > crates/zetmq-store/src/lib.rs \
  && mkdir -p crates/zetmq-client/src && echo "" > crates/zetmq-client/src/lib.rs \
- && mkdir -p crates/zetmq-server/src && echo "fn main() {}" > crates/zetmq-server/src/main.rs \
+ && mkdir -p crates/zetmq-server/src && echo "" > crates/zetmq-server/src/lib.rs \
+ && echo "fn main() {}" > crates/zetmq-server/src/main.rs \
  && mkdir -p crates/zetmq-bench/src && echo "" > crates/zetmq-bench/src/lib.rs \
+ && mkdir -p crates/zetmq-bench/benches && echo "" > crates/zetmq-bench/benches/routing_match.rs \
  && mkdir -p crates/zetmq-tests/src && echo "" > crates/zetmq-tests/src/lib.rs \
  && cargo build --release -p zetmq-server \
  && rm -rf target/release/deps/zetmq*
@@ -30,7 +32,9 @@ RUN touch crates/zetmq-protocol/src/lib.rs \
     crates/zetmq-core/src/lib.rs \
     crates/zetmq-store/src/lib.rs \
     crates/zetmq-client/src/lib.rs \
+    crates/zetmq-server/src/lib.rs \
     crates/zetmq-server/src/main.rs \
+    crates/zetmq-bench/benches/routing_match.rs \
     && cargo build --release -p zetmq-server
 
 # --- Runtime stage ---
