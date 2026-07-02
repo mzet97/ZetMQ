@@ -11,4 +11,5 @@ bytes.workspace = true
 thiserror.workspace = true
 dashmap = "6"
 parking_lot = "0.12"
+smallvec.workspace = true
 tracing.workspace = true

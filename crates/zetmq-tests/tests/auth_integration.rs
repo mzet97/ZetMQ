@@ -24,6 +24,7 @@ async fn spawn_server_with_config(
             zetmq_server::store::StoreManager::new(),
             shutdown_tx.clone(),
         )
+        .await
         .unwrap(),
     );
     let handle = tokio::spawn({

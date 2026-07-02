@@ -1,6 +1,12 @@
+use std::sync::Arc;
+
 use crate::error::CoreError;
 
 const MAX_QUEUE_GROUP_NAME: usize = 128;
+
+/// Interned queue-group key: (subject pattern, queue group name).
+/// Used as a cheap `Arc::ptr_eq` identity on the publish hot path.
+pub type QueueGroupKey = (Arc<str>, Arc<str>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct QueueGroupName(String);

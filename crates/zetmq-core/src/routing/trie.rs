@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
+use smallvec::{smallvec, SmallVec};
+
 use crate::id::SubscriptionId;
 use crate::subject::Subject;
+
+pub type MatchResult = SmallVec<[SubscriptionId; 8]>;
 
 #[derive(Debug, Default)]
 struct TrieNode {
@@ -13,11 +17,19 @@ struct TrieNode {
 #[derive(Debug, Default)]
 pub struct SubjectTrie {
     root: TrieNode,
+    /// Total number of subscribers across all nodes.
+    /// Incremented on insert, decremented on remove. Used for O(1) emptiness check.
+    subscriber_count: usize,
 }
 
 impl SubjectTrie {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns true when no wildcard subscriptions remain in the trie.
+    pub fn is_empty(&self) -> bool {
+        self.subscriber_count == 0
     }
 
     pub fn insert(&mut self, tokens: &[String], sub_id: SubscriptionId, has_multi_wildcard: bool) {
@@ -26,12 +38,14 @@ impl SubjectTrie {
         for (i, token) in tokens.iter().enumerate() {
             if has_multi_wildcard && i == tokens.len() - 1 {
                 node.multi_wildcard_subs.push(sub_id);
+                self.subscriber_count += 1;
                 return;
             }
             node = node.children.entry(token.clone()).or_default();
         }
 
         node.exact_subs.push(sub_id);
+        self.subscriber_count += 1;
     }
 
     pub fn remove(&mut self, tokens: &[String], sub_id: SubscriptionId, has_multi_wildcard: bool) {
@@ -39,7 +53,11 @@ impl SubjectTrie {
 
         for (i, token) in tokens.iter().enumerate() {
             if has_multi_wildcard && i == tokens.len() - 1 {
+                let before = node.multi_wildcard_subs.len();
                 node.multi_wildcard_subs.retain(|id| *id != sub_id);
+                if node.multi_wildcard_subs.len() < before {
+                    self.subscriber_count = self.subscriber_count.saturating_sub(1);
+                }
                 return;
             }
             match node.children.get_mut(token) {
@@ -48,12 +66,16 @@ impl SubjectTrie {
             }
         }
 
+        let before = node.exact_subs.len();
         node.exact_subs.retain(|id| *id != sub_id);
+        if node.exact_subs.len() < before {
+            self.subscriber_count = self.subscriber_count.saturating_sub(1);
+        }
     }
 
-    pub fn match_subject(&self, subject: &Subject) -> Vec<SubscriptionId> {
+    pub fn match_subject(&self, subject: &Subject) -> MatchResult {
         let tokens = subject.tokens();
-        let mut results = Vec::with_capacity(8);
+        let mut results = smallvec![];
 
         Self::match_recursive(&self.root, tokens, 0, &mut results);
 
@@ -64,7 +86,7 @@ impl SubjectTrie {
         node: &TrieNode,
         tokens: &[String],
         index: usize,
-        results: &mut Vec<SubscriptionId>,
+        results: &mut MatchResult,
     ) {
         // Multi-wildcard at this node matches 1+ remaining tokens
         if !node.multi_wildcard_subs.is_empty() && index < tokens.len() {
@@ -102,7 +124,9 @@ mod tests {
         trie.insert(&["orders".into(), "created".into()], sub, false);
 
         let subj = Subject::parse("orders.created").unwrap();
-        assert_eq!(trie.match_subject(&subj), vec![sub]);
+        let mut expected = MatchResult::new();
+        expected.push(sub);
+        assert_eq!(trie.match_subject(&subj), expected);
     }
 
     #[test]

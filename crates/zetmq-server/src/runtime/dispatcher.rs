@@ -1,22 +1,38 @@
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::RwLock;
 
 use bytes::BytesMut;
+use dashmap::DashMap;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
-use zetmq_core::{BrokerCore, ConnectionId, QueueGroupName, SubjectPattern};
-use zetmq_protocol::{BrokerCommand, Frame, FrameType, StreamInfoResponse};
+use zetmq_core::{BrokerCore, ConnectionId, PublishItem, QueueGroupName, SubjectPattern};
+use zetmq_protocol::{BrokerCommand, Frame, FrameType, PublishCommand, StreamInfoResponse};
 
 use crate::session::handler::OutboundFrame;
 use crate::store::StoreManager;
+
+/// Spawn a fire-and-forget task that logs a warning if it panics.
+/// Used for store operations (create_stream / delete_stream / ack) that are
+/// not awaited by the dispatcher. If the task panics, the default tokio handler
+/// only emits to stderr; this wrapper surfaces the panic via tracing so it
+/// appears in structured logs.
+fn spawn_traced<F>(future: F)
+where
+    F: std::future::Future<Output: Send + 'static> + Send + 'static,
+{
+    let handle = tokio::spawn(future);
+    tokio::spawn(async move {
+        if let Err(panic_err) = handle.await {
+            error!(error = %panic_err, "store task panicked");
+        }
+    });
+}
 
 /// Tracks which (stream, consumer) a subscription is bound to,
 /// so ACK/NACK frames can be routed to the correct consumer.
 pub struct SubConsumerMap {
     /// subscription_id -> (stream_name, consumer_name)
-    map: RwLock<HashMap<u64, (String, String)>>,
+    map: DashMap<u64, (String, String)>,
 }
 
 impl Default for SubConsumerMap {
@@ -28,26 +44,59 @@ impl Default for SubConsumerMap {
 impl SubConsumerMap {
     pub fn new() -> Self {
         Self {
-            map: RwLock::new(HashMap::new()),
+            map: DashMap::new(),
         }
     }
 
     pub fn insert(&self, sub_id: u64, stream: String, consumer: String) {
-        if let Ok(mut map) = self.map.write() {
-            map.insert(sub_id, (stream, consumer));
-        }
+        self.map.insert(sub_id, (stream, consumer));
     }
 
     pub fn remove(&self, sub_id: u64) -> Option<(String, String)> {
-        self.map.write().ok().and_then(|mut map| map.remove(&sub_id))
+        self.map.remove(&sub_id).map(|v| v.1)
     }
 
     pub fn get(&self, sub_id: u64) -> Option<(String, String)> {
-        self.map
-            .read()
-            .ok()
-            .and_then(|map| map.get(&sub_id).cloned())
+        self.map.get(&sub_id).map(|v| v.clone())
     }
+}
+
+pub fn dispatch_publish_batch(
+    broker: &Arc<BrokerCore>,
+    _conn_id: ConnectionId,
+    publishes: Vec<PublishCommand>,
+) {
+    if publishes.is_empty() {
+        return;
+    }
+
+    let mut items = Vec::with_capacity(publishes.len());
+    for p in publishes {
+        let subject_str = match std::str::from_utf8(&p.subject) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        let subject = match broker.parse_subject(subject_str) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        let reply_to = p.reply_to.as_ref().and_then(|reply_bytes| {
+            std::str::from_utf8(reply_bytes)
+                .ok()
+                .and_then(|reply_to| broker.parse_subject(reply_to).ok())
+        });
+
+        items.push(PublishItem {
+            subject,
+            payload: p.payload,
+            reply_to,
+            headers: p.headers,
+        });
+    }
+
+    broker.publish_batch(items);
 }
 
 pub fn dispatch(
@@ -65,19 +114,14 @@ pub fn dispatch(
                 Ok(s) => s,
                 Err(_) => return,
             };
-            if let Ok(subject) = broker.parse_subject(subject_str) {
-                let mut msg =
-                    zetmq_core::Message::new(subject, p.payload.clone()).with_headers(p.headers);
-                if let Some(ref reply_bytes) = p.reply_to {
-                    if let Ok(reply_to) = std::str::from_utf8(reply_bytes) {
-                        if let Ok(reply_subject) = broker.parse_subject(reply_to) {
-                            msg = msg.with_reply_to(reply_subject);
-                        }
-                    }
-                }
 
-                broker.publish(msg);
-            }
+            let reply_to = p.reply_to.as_ref().and_then(|reply_bytes| {
+                std::str::from_utf8(reply_bytes)
+                    .ok()
+                    .and_then(|reply_to| broker.parse_subject(reply_to).ok())
+            });
+
+            broker.publish_with_str(subject_str, p.payload.clone(), reply_to, p.headers.clone());
         }
         BrokerCommand::Subscribe(s) => {
             if let Ok(pattern) = SubjectPattern::parse(&s.subject_pattern) {
@@ -120,7 +164,7 @@ pub fn dispatch(
             let outbound = outbound.clone();
             let store = store.clone();
 
-            tokio::spawn(async move {
+            spawn_traced(async move {
                 let result = store.create_stream(&name, config).await;
                 let frame =
                     match result {
@@ -155,7 +199,7 @@ pub fn dispatch(
             let outbound = outbound.clone();
             let store = store.clone();
 
-            tokio::spawn(async move {
+            spawn_traced(async move {
                 let result = store.delete_stream(&name).await;
                 let frame =
                     match result {
@@ -184,7 +228,7 @@ pub fn dispatch(
                 .map(|(_, c)| c)
                 .unwrap_or_else(|| "default".to_string());
 
-            tokio::spawn(async move {
+            spawn_traced(async move {
                 let acked = store.ack(&stream, &consumer, sequence).await;
                 if !acked {
                     warn!(stream = %stream, consumer = %consumer, sequence, "ACK for unknown consumer/sequence");

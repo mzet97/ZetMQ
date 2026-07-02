@@ -86,6 +86,7 @@ async fn tls_connect_and_pubsub() {
             zetmq_server::store::StoreManager::new(),
             shutdown_tx.clone(),
         )
+        .await
         .unwrap(),
     );
     let handle = tokio::spawn({
@@ -145,6 +146,7 @@ async fn tls_reject_non_tls_client() {
             zetmq_server::store::StoreManager::new(),
             shutdown_tx.clone(),
         )
+        .await
         .unwrap(),
     );
     let handle = tokio::spawn({
@@ -185,6 +187,7 @@ async fn no_tls_plain_connection_works() {
             zetmq_server::store::StoreManager::new(),
             shutdown_tx.clone(),
         )
+        .await
         .unwrap(),
     );
     let handle = tokio::spawn({

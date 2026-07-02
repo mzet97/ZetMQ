@@ -1,4 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box;
 use zetmq_core::{RoutingEngine, Subject, SubjectPattern, SubscriptionId};
 
 fn bench_exact_match(c: &mut Criterion) {

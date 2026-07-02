@@ -58,7 +58,7 @@ async fn read_frame(stream: &mut TcpStream) -> Frame {
         .unwrap()
 }
 
-fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
+async fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
     let config = ServerConfig {
         port,
         ..Default::default()
@@ -72,6 +72,7 @@ fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
             zetmq_server::store::StoreManager::new(),
             shutdown_tx,
         )
+        .await
         .unwrap(),
     );
     let broker_clone = broker.clone();
@@ -83,7 +84,7 @@ fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
 
 #[tokio::test]
 async fn single_wildcard_matches() {
-    let (_broker, server) = start_server(14224);
+    let (_broker, server) = start_server(14224).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Subscriber with orders.*
@@ -115,7 +116,7 @@ async fn single_wildcard_matches() {
 
 #[tokio::test]
 async fn multi_wildcard_matches() {
-    let (_broker, server) = start_server(14225);
+    let (_broker, server) = start_server(14225).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Subscriber with orders.>

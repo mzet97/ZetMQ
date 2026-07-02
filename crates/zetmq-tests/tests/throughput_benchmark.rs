@@ -2,13 +2,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 
 use zetmq_core::BrokerCore;
-use zetmq_protocol::{Frame, FrameType};
+use zetmq_protocol::{version::CURRENT_VERSION, Frame, FrameType, FRAME_HEADER_SIZE};
 use zetmq_server::config::ServerConfig;
 use zetmq_server::network::TcpServer;
 
@@ -50,29 +50,6 @@ async fn read_frame_buffered(stream: &mut TcpStream, buf: &mut BytesMut) -> Fram
     }
 }
 
-/// Read a frame with timeout using buffered reading.
-async fn read_frame_timeout(
-    stream: &mut TcpStream,
-    buf: &mut BytesMut,
-    timeout: Duration,
-) -> Option<Frame> {
-    // Try to decode from existing buffer first
-    if let Some(frame) = Frame::decode_from(buf, 2 * 1024 * 1024).unwrap() {
-        return Some(frame);
-    }
-    // Need more data — read with timeout
-    let mut tmp = [0u8; 65536];
-    let n = tokio::time::timeout(timeout, stream.read(&mut tmp))
-        .await
-        .ok()?
-        .ok()?;
-    if n == 0 {
-        return None;
-    }
-    buf.extend_from_slice(&tmp[..n]);
-    Frame::decode_from(buf, 2 * 1024 * 1024).unwrap()
-}
-
 /// Batch-encode frames into a buffer and flush when threshold is reached.
 struct BatchWriter<'a> {
     stream: &'a mut TcpStream,
@@ -105,7 +82,17 @@ impl<'a> BatchWriter<'a> {
 }
 
 async fn connect_client(addr: &str) -> TcpStream {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut stream = loop {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => break stream,
+            Err(err) if Instant::now() < deadline => {
+                let _ = err;
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            Err(err) => panic!("connect: {err}"),
+        }
+    };
     stream.set_nodelay(true).unwrap();
     stream
         .write_all(&connect_frame().encode())
@@ -125,36 +112,100 @@ fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
     };
     let broker = BrokerCore::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(
-        TcpServer::new(
-            config,
-            broker.clone(),
-            zetmq_server::store::StoreManager::new(),
-            shutdown_tx,
-        )
-        .unwrap(),
-    );
     let b = broker.clone();
     let handle = tokio::spawn(async move {
+        let server = Arc::new(
+            TcpServer::new(
+                config,
+                broker,
+                zetmq_server::store::StoreManager::new(),
+                shutdown_tx,
+            )
+            .await
+            .unwrap(),
+        );
         let _ = server.run().await;
     });
     (b, handle)
+}
+
+async fn wait_for_published(broker: &BrokerCore, target: u64, timeout: Duration) -> u64 {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let published = broker.metrics().snapshot().messages_published;
+        if published >= target || Instant::now() >= deadline {
+            return published;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+async fn wait_for_counter(counter: &AtomicU64, target: u64, timeout: Duration) -> u64 {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let value = counter.load(Ordering::Relaxed);
+        if value >= target || Instant::now() >= deadline {
+            return value;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+async fn count_msg_frames(mut stream: TcpStream, counter: Arc<AtomicU64>, timeout: Duration) {
+    let mut buf = BytesMut::with_capacity(131072);
+    let mut tmp = [0u8; 65536];
+    let deadline = Instant::now() + timeout;
+    let msg_type = FrameType::Msg.as_u8();
+
+    loop {
+        while buf.len() >= FRAME_HEADER_SIZE {
+            if u16::from_be_bytes([buf[0], buf[1]]) != 0x5A4D || buf[2] != CURRENT_VERSION {
+                return;
+            }
+
+            let header_len = u32::from_be_bytes([buf[14], buf[15], buf[16], buf[17]]) as usize;
+            let payload_len = u32::from_be_bytes([buf[18], buf[19], buf[20], buf[21]]) as usize;
+            let total = FRAME_HEADER_SIZE + header_len + payload_len;
+            if buf.len() < total {
+                break;
+            }
+
+            if buf[3] == msg_type {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }
+            buf.advance(total);
+        }
+
+        if Instant::now() >= deadline {
+            break;
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let read_timeout = remaining.min(Duration::from_millis(100));
+        let n = match tokio::time::timeout(read_timeout, stream.read(&mut tmp)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) | Err(_) => break,
+        };
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+    }
 }
 
 // --- Benchmarks ---
 
 /// Benchmark 1: Publish throughput (fire-and-forget, no subscribers)
 /// Measures how many PUBLISH frames the server can ingest per second.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bench_publish_throughput() {
     let port = 14300;
     let addr = format!("127.0.0.1:{port}");
     let (broker, server) = start_server(port);
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let mut pub_stream = connect_client(&addr).await;
 
-    let total = 200_000u64;
+    let total = 1_000_000u64;
     let payload = b"x"; // 1-byte payload
     let warmup = 2000;
 
@@ -165,26 +216,29 @@ async fn bench_publish_throughput() {
         writer.write_frame(&frame).await;
     }
     writer.flush().await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let warmup_published = wait_for_published(&broker, warmup, Duration::from_secs(30)).await;
+    assert!(
+        warmup_published >= warmup,
+        "warmup did not complete: {warmup_published}/{warmup}"
+    );
 
-    // Benchmark with batched writes
-    let start = Instant::now();
-    let mut writer = BatchWriter::new(&mut pub_stream);
+    let mut bench_buf = BytesMut::with_capacity((total as usize) * 40);
     for i in 0..total {
         let frame = pub_frame("bench.pub", payload, i);
-        writer.write_frame(&frame).await;
+        frame.encode_into(&mut bench_buf);
     }
-    writer.flush().await;
-    // Give server time to process
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let elapsed = start.elapsed();
 
-    let snapshot = broker.metrics().snapshot();
-    let published = snapshot.messages_published;
-    let ops_sec = published as f64 / elapsed.as_secs_f64();
+    // Benchmark server ingest with client-side frame construction excluded.
+    let start = Instant::now();
+    pub_stream.write_all(&bench_buf).await.unwrap();
+    let expected = warmup + total;
+    let published = wait_for_published(&broker, expected, Duration::from_secs(30)).await;
+    let elapsed = start.elapsed();
+    let measured = published.saturating_sub(warmup_published);
+    let ops_sec = measured as f64 / elapsed.as_secs_f64();
 
     println!("\n=== Publish Throughput (no subscribers) ===");
-    println!("Messages published: {published}");
+    println!("Messages published: {published} (benchmark window: {measured})");
     println!("Elapsed: {:.2}s", elapsed.as_secs_f64());
     println!("Throughput: {ops_sec:.0} ops/s");
 
@@ -195,12 +249,11 @@ async fn bench_publish_throughput() {
 
 /// Benchmark 2: Pub/Sub end-to-end throughput
 /// Measures how many messages flow from publisher -> broker -> subscriber per second.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bench_pubsub_throughput() {
     let port = 14301;
     let addr = format!("127.0.0.1:{port}");
     let (broker, server) = start_server(port);
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Subscriber
     let mut sub_stream = connect_client(&addr).await;
@@ -214,22 +267,16 @@ async fn bench_pubsub_throughput() {
     // Publisher
     let mut pub_stream = connect_client(&addr).await;
 
-    let total = 100_000u64;
+    let total = 500_000u64;
     let payload = b"hello-zetmq"; // 11 bytes
 
     // Spawn reader task that counts received messages (buffered)
     let received = Arc::new(AtomicU64::new(0));
-    let received_clone = received.clone();
-    let reader = tokio::spawn(async move {
-        let mut buf = BytesMut::with_capacity(131072);
-        while let Some(frame) =
-            read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await
-        {
-            if frame.frame_type().ok() == Some(FrameType::Msg) {
-                received_clone.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    });
+    let reader = tokio::spawn(count_msg_frames(
+        sub_stream,
+        received.clone(),
+        Duration::from_secs(60),
+    ));
 
     // Benchmark publish with batching
     let start = Instant::now();
@@ -240,18 +287,9 @@ async fn bench_pubsub_throughput() {
     }
     writer.flush().await;
 
-    // Wait for reader to catch up
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let r = received.load(Ordering::Relaxed);
-        if r >= total || Instant::now() > deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let r = wait_for_counter(&received, total, Duration::from_secs(60)).await;
     let elapsed = start.elapsed();
 
-    let r = received.load(Ordering::Relaxed);
     let ops_sec = r as f64 / elapsed.as_secs_f64();
 
     println!("\n=== Pub/Sub End-to-End Throughput ===");
@@ -273,15 +311,21 @@ async fn bench_pubsub_throughput() {
 
 /// Benchmark 3: Fan-out (1 publisher -> N subscribers)
 /// Measures total delivery rate with multiple subscribers.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bench_fanout_throughput() {
-    let port = 14302;
+    run_fanout_benchmark(14302, 4, "bench.fanout").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bench_fanout_10_throughput() {
+    run_fanout_benchmark(14304, 10, "bench.fanout10").await;
+}
+
+async fn run_fanout_benchmark(port: u16, num_subs: usize, subject: &str) {
     let addr = format!("127.0.0.1:{port}");
     let (broker, server) = start_server(port);
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let num_subs = 4;
-    let total = 50_000u64;
+    let total = 200_000u64;
     let payload = b"fanout";
 
     // Create subscribers with buffered reading
@@ -291,23 +335,17 @@ async fn bench_fanout_throughput() {
     for _ in 0..num_subs {
         let mut sub_stream = connect_client(&addr).await;
         sub_stream
-            .write_all(&sub_frame("bench.fanout", 1).encode())
+            .write_all(&sub_frame(subject, 1).encode())
             .await
             .unwrap();
         let mut sub_buf = BytesMut::with_capacity(65536);
         let _suback = read_frame_buffered(&mut sub_stream, &mut sub_buf).await;
 
-        let counter = total_received.clone();
-        let handle = tokio::spawn(async move {
-            let mut buf = BytesMut::with_capacity(131072);
-            while let Some(frame) =
-                read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await
-            {
-                if frame.frame_type().ok() == Some(FrameType::Msg) {
-                    counter.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        });
+        let handle = tokio::spawn(count_msg_frames(
+            sub_stream,
+            total_received.clone(),
+            Duration::from_secs(60),
+        ));
         reader_handles.push(handle);
     }
 
@@ -317,26 +355,18 @@ async fn bench_fanout_throughput() {
     let start = Instant::now();
     let mut writer = BatchWriter::new(&mut pub_stream);
     for i in 0..total {
-        let frame = pub_frame("bench.fanout", payload, i);
+        let frame = pub_frame(subject, payload, i);
         writer.write_frame(&frame).await;
     }
     writer.flush().await;
 
     let expected = total * num_subs as u64;
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let r = total_received.load(Ordering::Relaxed);
-        if r >= expected || Instant::now() > deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let r = wait_for_counter(&total_received, expected, Duration::from_secs(60)).await;
     let elapsed = start.elapsed();
 
-    let r = total_received.load(Ordering::Relaxed);
     let ops_sec = r as f64 / elapsed.as_secs_f64();
 
-    println!("\n=== Fan-out Throughput (1 pub -> {num_subs} subs) ===");
+    println!("\n=== Fan-out Throughput (1 pub -> {num_subs} subs, {subject}) ===");
     println!("Published: {total} | Total delivered: {r} (expected {expected})");
     println!("Elapsed: {:.2}s", elapsed.as_secs_f64());
     println!("Throughput: {ops_sec:.0} total deliveries/s");
@@ -358,12 +388,11 @@ async fn bench_fanout_throughput() {
 
 /// Benchmark 4: Subject routing scalability
 /// Measures throughput with many distinct subjects.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bench_many_subjects_throughput() {
     let port = 14303;
     let addr = format!("127.0.0.1:{port}");
     let (_broker, server) = start_server(port);
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let num_subjects = 1000u64;
     let msgs_per_subject = 100u64;
@@ -379,17 +408,11 @@ async fn bench_many_subjects_throughput() {
     let _suback = read_frame_buffered(&mut sub_stream, &mut sub_buf).await;
 
     let received = Arc::new(AtomicU64::new(0));
-    let received_clone = received.clone();
-    let reader = tokio::spawn(async move {
-        let mut buf = BytesMut::with_capacity(131072);
-        while let Some(frame) =
-            read_frame_timeout(&mut sub_stream, &mut buf, Duration::from_secs(5)).await
-        {
-            if frame.frame_type().ok() == Some(FrameType::Msg) {
-                received_clone.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    });
+    let reader = tokio::spawn(count_msg_frames(
+        sub_stream,
+        received.clone(),
+        Duration::from_secs(30),
+    ));
 
     // Publisher with batching
     let mut pub_stream = connect_client(&addr).await;
@@ -405,17 +428,9 @@ async fn bench_many_subjects_throughput() {
     }
     writer.flush().await;
 
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let r = received.load(Ordering::Relaxed);
-        if r >= total || Instant::now() > deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let r = wait_for_counter(&received, total, Duration::from_secs(30)).await;
     let elapsed = start.elapsed();
 
-    let r = received.load(Ordering::Relaxed);
     let ops_sec = r as f64 / elapsed.as_secs_f64();
 
     println!("\n=== Many-Subject Throughput ({num_subjects} subjects, wildcard sub) ===");

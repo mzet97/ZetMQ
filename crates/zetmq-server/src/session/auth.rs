@@ -55,6 +55,11 @@ impl AuthContext {
         self.publish_patterns.iter().any(|p| p.matches(subject))
     }
 
+    /// True when no publish restrictions are configured for this connection.
+    pub fn is_publish_unrestricted(&self) -> bool {
+        self.publish_patterns.is_empty()
+    }
+
     /// Check if a subscription pattern is allowed.
     /// Empty patterns list means unrestricted (no auth mode).
     pub fn can_subscribe(&self, pattern: &SubjectPattern) -> bool {

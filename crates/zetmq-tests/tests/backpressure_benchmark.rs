@@ -9,7 +9,10 @@ use zetmq_core::BrokerCore;
 use zetmq_server::config::ServerConfig;
 use zetmq_server::network::TcpServer;
 
-fn start_server(port: u16, output_buffer: usize) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
+async fn start_server(
+    port: u16,
+    output_buffer: usize,
+) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
     let config = ServerConfig {
         port,
         connection_output_buffer: output_buffer,
@@ -24,6 +27,7 @@ fn start_server(port: u16, output_buffer: usize) -> (Arc<BrokerCore>, tokio::tas
             zetmq_server::store::StoreManager::new(),
             shutdown_tx,
         )
+        .await
         .unwrap(),
     );
     let handle = tokio::spawn(async move {
@@ -39,7 +43,7 @@ fn start_server(port: u16, output_buffer: usize) -> (Arc<BrokerCore>, tokio::tas
 async fn bench_backpressure_slow_consumer() {
     let port = 16020;
     let addr = format!("127.0.0.1:{port}");
-    let (broker, server) = start_server(port, 16);
+    let (broker, server) = start_server(port, 16).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let subject = "bench.backpressure";

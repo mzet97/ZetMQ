@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::delivery::DeliveryHandle;
 use crate::id::{ConnectionId, SubscriptionId};
-use crate::queue_group::QueueGroupName;
+use crate::queue_group::{QueueGroupKey, QueueGroupName};
 use crate::subject_pattern::SubjectPattern;
 
 #[derive(Clone)]
@@ -14,6 +14,7 @@ pub struct Subscription {
     pub connection_id: ConnectionId,
     pub pattern: SubjectPattern,
     pub queue_group: Option<QueueGroupName>,
+    pub queue_group_key: Option<Arc<QueueGroupKey>>,
     pub delivery: Arc<dyn DeliveryHandle>,
 }
 
@@ -23,6 +24,7 @@ impl Subscription {
         connection_id: ConnectionId,
         pattern: SubjectPattern,
         queue_group: Option<QueueGroupName>,
+        queue_group_key: Option<Arc<QueueGroupKey>>,
         delivery: Arc<dyn DeliveryHandle>,
     ) -> Self {
         Self {
@@ -30,6 +32,7 @@ impl Subscription {
             connection_id,
             pattern,
             queue_group,
+            queue_group_key,
             delivery,
         }
     }

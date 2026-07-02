@@ -22,6 +22,7 @@ async fn spawn_server(port: u16) -> (Arc<TcpServer>, tokio::task::JoinHandle<()>
             zetmq_server::store::StoreManager::new(),
             shutdown_tx,
         )
+        .await
         .unwrap(),
     );
     let handle = tokio::spawn({

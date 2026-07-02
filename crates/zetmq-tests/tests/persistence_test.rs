@@ -23,7 +23,11 @@ async fn start_server(
     let broker = BrokerCore::new();
     let store = zetmq_server::store::StoreManager::new();
     let (shutdown_tx, _) = broadcast::channel(1);
-    let server = Arc::new(TcpServer::new(config, broker, store, shutdown_tx).unwrap());
+    let server = Arc::new(
+        TcpServer::new(config, broker, store, shutdown_tx)
+            .await
+            .unwrap(),
+    );
     let handle = tokio::spawn({
         let server = server.clone();
         async move {

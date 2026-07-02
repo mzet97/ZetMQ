@@ -13,11 +13,13 @@ pub mod subject;
 pub mod subject_pattern;
 pub mod subscription;
 
+pub use smallvec;
+
 pub use broker::BrokerCore;
 pub use delivery::{DeliveryHandle, DeliveryMessage, DeliveryStatus};
 pub use error::{CoreError, RoutingError};
 pub use id::{ConnectionId, IdGenerator, MessageId, QueueGroupId, SubscriptionId};
-pub use message::Message;
+pub use message::{Message, PublishItem};
 pub use metrics::CoreMetrics;
 pub use queue_group::QueueGroupName;
 pub use routing::RoutingEngine;

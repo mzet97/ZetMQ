@@ -15,6 +15,7 @@ pub use subscribe::SubscribeCommand;
 pub use unsubscribe::UnsubscribeCommand;
 
 use bytes::Bytes;
+use std::sync::Arc;
 
 use crate::error::ProtocolError;
 use crate::frame::{Frame, FrameType};
@@ -89,7 +90,7 @@ impl BrokerCommand {
 
                 // Parse headers from frame header section
                 let headers = if !frame.headers.is_empty() {
-                    Some(crate::headers::decode_headers(&frame.headers)?)
+                    Some(Arc::new(crate::headers::decode_headers(&frame.headers)?))
                 } else {
                     None
                 };

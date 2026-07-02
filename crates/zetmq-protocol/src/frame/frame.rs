@@ -74,17 +74,20 @@ impl Frame {
             return Ok(None);
         }
 
-        // Consume header
-        let mut header_buf = buf.split_to(FRAME_HEADER_SIZE);
+        // Consume the whole frame in one split and slice the parts. This avoids
+        // three separate split_to/freeze calls and their associated refcount ops.
+        let frame_bytes = buf.split_to(total).freeze();
+
+        let mut header_buf = frame_bytes.slice(0..FRAME_HEADER_SIZE);
         let header = FrameHeader::decode(&mut header_buf)?;
 
         let headers = if header_len > 0 {
-            buf.split_to(header_len).freeze()
+            frame_bytes.slice(FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header_len)
         } else {
             Bytes::new()
         };
         let payload = if payload_len > 0 {
-            buf.split_to(payload_len).freeze()
+            frame_bytes.slice(FRAME_HEADER_SIZE + header_len..total)
         } else {
             Bytes::new()
         };

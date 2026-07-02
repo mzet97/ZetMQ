@@ -4,7 +4,7 @@ use dashmap::DashMap;
 
 use crate::delivery::DeliveryHandle;
 use crate::id::{ConnectionId, SubscriptionId};
-use crate::queue_group::QueueGroupName;
+use crate::queue_group::{QueueGroupKey, QueueGroupName};
 use crate::routing::RoutingEngine;
 use crate::subject_pattern::SubjectPattern;
 use crate::subscription::Subscription;
@@ -31,9 +31,17 @@ impl SubscriptionRegistry {
         connection_id: ConnectionId,
         pattern: SubjectPattern,
         queue_group: Option<QueueGroupName>,
+        queue_group_key: Option<Arc<QueueGroupKey>>,
         delivery: Arc<dyn DeliveryHandle>,
     ) {
-        let sub = Subscription::new(id, connection_id, pattern.clone(), queue_group, delivery);
+        let sub = Subscription::new(
+            id,
+            connection_id,
+            pattern.clone(),
+            queue_group,
+            queue_group_key,
+            delivery,
+        );
 
         self.router.insert(&pattern, id);
         self.subscriptions.insert(id, sub);
@@ -127,6 +135,7 @@ mod tests {
             ConnectionId::new(1),
             pattern("test"),
             None,
+            None,
             delivery,
         );
         assert!(registry.get(SubscriptionId::new(1)).is_some());
@@ -143,6 +152,7 @@ mod tests {
             SubscriptionId::new(1),
             ConnectionId::new(1),
             pattern("test"),
+            None,
             None,
             delivery,
         );
@@ -162,9 +172,17 @@ mod tests {
             conn,
             pattern("a"),
             None,
+            None,
             delivery.clone(),
         );
-        registry.add(SubscriptionId::new(2), conn, pattern("b"), None, delivery);
+        registry.add(
+            SubscriptionId::new(2),
+            conn,
+            pattern("b"),
+            None,
+            None,
+            delivery,
+        );
 
         let removed = registry.remove_all_for_connection(conn);
         assert_eq!(removed.len(), 2);
@@ -183,9 +201,17 @@ mod tests {
             conn,
             pattern("a"),
             None,
+            None,
             delivery.clone(),
         );
-        registry.add(SubscriptionId::new(2), conn, pattern("b"), None, delivery);
+        registry.add(
+            SubscriptionId::new(2),
+            conn,
+            pattern("b"),
+            None,
+            None,
+            delivery,
+        );
 
         assert_eq!(registry.get_by_connection(conn).len(), 2);
     }

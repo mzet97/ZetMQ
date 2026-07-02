@@ -38,6 +38,10 @@ impl CoreMetrics {
         self.messages_published.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn inc_published_by(&self, n: u64) {
+        self.messages_published.fetch_add(n, Ordering::Relaxed);
+    }
+
     pub fn inc_delivered(&self) {
         self.messages_delivered.fetch_add(1, Ordering::Relaxed);
     }

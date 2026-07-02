@@ -9,6 +9,6 @@ pub mod version;
 
 pub use command::{
     AckCommand, AuthInfo, BrokerCommand, ConnectCommand, CreateStreamCommand, DeleteStreamCommand,
-    NackCommand, StreamInfoResponse,
+    NackCommand, PublishCommand, StreamInfoResponse,
 };
-pub use frame::{Frame, FrameHeader, FrameType};
+pub use frame::{Frame, FrameHeader, FrameType, FRAME_HEADER_SIZE};

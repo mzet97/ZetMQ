@@ -1,24 +1,25 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use parking_lot::RwLock;
+use smallvec::{smallvec, SmallVec};
 use tracing::warn;
 
 use crate::delivery::{DeliveryHandle, DeliveryMessage, DeliveryStatus};
 use crate::error::CoreError;
-use crate::id::{ConnectionId, IdGenerator, SubscriptionId};
-use crate::message::Message;
+use crate::id::{ConnectionId, IdGenerator, MessageId, SubscriptionId};
+use crate::message::{HeaderMap, Message, PublishItem};
 use crate::metrics::CoreMetrics;
-use crate::queue_group::QueueGroupName;
-use crate::routing::RoutingEngine;
+use crate::queue_group::{QueueGroupKey, QueueGroupName};
+use crate::routing::{MatchResult, RoutingEngine};
 use crate::subject::Subject;
 use crate::subject_pattern::SubjectPattern;
 use crate::subscription::registry::SubscriptionRegistry;
 
 struct QueueGroupState {
     members: Vec<SubscriptionId>,
-    current_index: usize,
+    current_index: AtomicUsize,
 }
 
 pub struct BrokerCore {
@@ -26,9 +27,16 @@ pub struct BrokerCore {
     router: Arc<RoutingEngine>,
     metrics: Arc<CoreMetrics>,
     sub_id_gen: IdGenerator,
-    queue_groups: RwLock<HashMap<(String, String), QueueGroupState>>,
+    queue_groups: DashMap<Arc<QueueGroupKey>, QueueGroupState>,
+    queue_group_keys: DashMap<QueueGroupKey, Arc<QueueGroupKey>>,
     subject_cache: DashMap<String, Subject>,
 }
+
+type FanoutDelivery = (SubscriptionId, ConnectionId, Arc<dyn DeliveryHandle>);
+
+type QueueGroupKeyRef = Option<Arc<QueueGroupKey>>;
+
+type SubCacheEntry = (SubscriptionId, ConnectionId, bool);
 
 impl BrokerCore {
     pub fn new() -> Arc<Self> {
@@ -41,7 +49,8 @@ impl BrokerCore {
             router,
             metrics,
             sub_id_gen: IdGenerator::new(1),
-            queue_groups: RwLock::new(HashMap::new()),
+            queue_groups: DashMap::new(),
+            queue_group_keys: DashMap::new(),
             subject_cache: DashMap::new(),
         })
     }
@@ -59,6 +68,39 @@ impl BrokerCore {
         Ok(subj)
     }
 
+    /// Create a `PublishItem` from a raw subject string, using the subject cache.
+    /// This avoids parsing the subject from scratch when the same subject is used
+    /// repeatedly, which is the common case in high-throughput benchmarks.
+    pub fn build_publish_item(
+        &self,
+        subject_str: &str,
+        payload: bytes::Bytes,
+    ) -> Result<PublishItem, CoreError> {
+        let subject = self.parse_subject(subject_str)?;
+        Ok(PublishItem {
+            subject,
+            payload,
+            reply_to: None,
+            headers: None,
+        })
+    }
+
+    pub fn router_has_wildcards(&self) -> bool {
+        self.router.has_wildcards()
+    }
+
+    pub fn has_active_subscriptions(&self) -> bool {
+        self.metrics.active_subscriptions.load(Ordering::Relaxed) > 0
+    }
+
+    pub fn router_exact_is_empty(&self, subject_str: &str) -> bool {
+        self.router.exact_is_empty(subject_str)
+    }
+
+    pub fn router_exact_single_subscriber(&self, subject: &Subject) -> Option<SubscriptionId> {
+        self.router.exact_single_subscriber(subject)
+    }
+
     pub fn subscribe(
         &self,
         connection_id: ConnectionId,
@@ -68,32 +110,43 @@ impl BrokerCore {
     ) -> SubscriptionId {
         let sub_id = SubscriptionId::new(self.sub_id_gen.next());
 
-        if let Some(ref qg) = queue_group {
-            let key = (pattern.as_str().to_string(), qg.as_str().to_string());
-            let mut groups = self.queue_groups.write();
-            let group = groups.entry(key).or_insert_with(|| QueueGroupState {
-                members: Vec::new(),
-                current_index: 0,
-            });
-            group.members.push(sub_id);
+        let queue_group_key = queue_group.as_ref().map(|qg| {
+            let key: QueueGroupKey = (Arc::from(pattern.as_str()), Arc::from(qg.as_str()));
+            self.queue_group_keys
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(key))
+                .clone()
+        });
+
+        if let Some(ref key) = queue_group_key {
+            self.queue_groups
+                .entry(key.clone())
+                .or_insert_with(|| QueueGroupState {
+                    members: Vec::new(),
+                    current_index: AtomicUsize::new(0),
+                })
+                .members
+                .push(sub_id);
         }
 
-        self.registry
-            .add(sub_id, connection_id, pattern, queue_group, delivery);
+        self.registry.add(
+            sub_id,
+            connection_id,
+            pattern,
+            queue_group,
+            queue_group_key,
+            delivery,
+        );
         self.metrics.inc_subscriptions();
         sub_id
     }
 
     pub fn unsubscribe(&self, _connection_id: ConnectionId, sub_id: SubscriptionId) {
         if let Some(sub) = self.registry.remove(sub_id) {
-            if let Some(ref qg) = sub.queue_group {
-                let key = (sub.pattern.as_str().to_string(), qg.as_str().to_string());
-                let mut groups = self.queue_groups.write();
-                if let Some(group) = groups.get_mut(&key) {
+            if let Some(ref key) = sub.queue_group_key {
+                if let Some(mut group) = self.queue_groups.get_mut(key) {
                     group.members.retain(|id| *id != sub_id);
-                    if group.current_index >= group.members.len() {
-                        group.current_index = 0;
-                    }
+                    // current_index stays valid under modulo in deliver_queue_group
                 }
             }
             self.metrics.dec_subscriptions();
@@ -102,36 +155,248 @@ impl BrokerCore {
 
     pub fn publish(&self, message: Message) {
         self.metrics.inc_published();
-
         let sub_ids = self.router.match_subject(&message.subject);
+        self.deliver_matches(message, sub_ids);
+    }
 
-        // Single pass: classify subscribers AND pre-extract delivery handles for fanout.
-        // This eliminates the second DashMap lookup that was previously needed in
-        // deliver_to_subscriber for fanout subscribers.
-        let mut queue_groups_map: HashMap<(String, String), Vec<SubscriptionId>> = HashMap::new();
-        let mut fanout_deliveries: Vec<(SubscriptionId, Arc<dyn DeliveryHandle>)> =
-            Vec::with_capacity(sub_ids.len());
+    /// Publish a message given as a raw subject string. Avoids parsing the subject
+    /// into tokens when there are no matching exact subscriptions and no wildcard
+    /// subscriptions, and avoids the shared subject-cache lookup.
+    pub fn publish_with_str(
+        &self,
+        subject_str: &str,
+        payload: bytes::Bytes,
+        reply_to: Option<Subject>,
+        headers: Option<Arc<HeaderMap>>,
+    ) {
+        self.metrics.inc_published();
+
+        let (exact_matches, needs_wildcard_parse) = self.router.match_subject_str(subject_str);
+
+        // Fast path: no subscribers at all, no need to parse subject or build Message.
+        if exact_matches.is_empty() && !needs_wildcard_parse {
+            return;
+        }
+
+        let subject = match self.parse_subject(subject_str) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let mut sub_ids = exact_matches;
+        if needs_wildcard_parse {
+            sub_ids.extend(self.router.match_wildcards(&subject));
+        }
+
+        let message = Message {
+            id: MessageId::new(0),
+            subject,
+            payload,
+            headers,
+            reply_to,
+            timestamp_ns: 0,
+        };
+        self.deliver_matches(message, sub_ids);
+    }
+
+    /// Publish a batch of messages in one call. Amortizes routing and mpsc
+    /// channel overhead across the batch, which is significantly faster than
+    /// one-at-a-time publishing when the read buffer contains many PUB frames.
+    pub fn publish_batch(&self, items: Vec<PublishItem>) {
+        if items.is_empty() {
+            return;
+        }
+
+        self.metrics
+            .messages_published
+            .fetch_add(items.len() as u64, Ordering::Relaxed);
+
+        // Fast path: no wildcards, first item has exactly one exact subscriber,
+        // that subscriber is not a queue group, and all items share the same
+        // subject. Deliver the whole batch as one MsgBatch to avoid HashMap
+        // allocation and per-message registry lookups. Fan-out batches fall
+        // through immediately because `exact_single_subscriber` returns None
+        // before the subject homogeneity check.
+        if !self.router_has_wildcards() {
+            if let Some(sub_id) = self.router_exact_single_subscriber(&items[0].subject) {
+                if let Some(sub_ref) = self.registry.get_ref(sub_id) {
+                    if sub_ref.queue_group_key.is_none()
+                        && items.iter().all(|item| item.subject == items[0].subject)
+                    {
+                        let connection_id = sub_ref.connection_id;
+                        let delivery = sub_ref.delivery.clone();
+                        drop(sub_ref);
+
+                        let total = items.len();
+                        let msgs: Vec<DeliveryMessage> = items
+                            .into_iter()
+                            .map(|item| DeliveryMessage {
+                                subscription_id: sub_id,
+                                connection_id,
+                                subject: item.subject,
+                                payload: item.payload,
+                                reply_to: item.reply_to,
+                                headers: item.headers,
+                            })
+                            .collect();
+
+                        let accepted = delivery.deliver_batch(msgs);
+                        self.metrics
+                            .messages_delivered
+                            .fetch_add(accepted as u64, Ordering::Relaxed);
+                        self.metrics
+                            .messages_dropped
+                            .fetch_add((total - accepted) as u64, Ordering::Relaxed);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Stage 1: route all items and group pending deliveries by subscription.
+        // Cache the last seen subject's match result and subscription delivery
+        // handles to avoid repeated DashMap lookups for same-subject batches
+        // (the common high-throughput case).
+        let mut pending: HashMap<SubscriptionId, SmallVec<[DeliveryMessage; 8]>> =
+            HashMap::with_capacity(items.len());
+
+        let mut last_subject: Option<Subject> = None;
+        let mut last_sub_ids: Option<MatchResult> = None;
+        let mut sub_cache: SmallVec<[SubCacheEntry; 8]> = SmallVec::new();
+
+        for item in items {
+            let sub_ids = if last_subject.as_ref() == Some(&item.subject) {
+                last_sub_ids.as_ref().unwrap()
+            } else {
+                let ids = self.router.match_subject(&item.subject);
+                last_subject = Some(item.subject.clone());
+                last_sub_ids = Some(ids);
+                last_sub_ids.as_ref().unwrap()
+            };
+
+            if sub_ids.is_empty() {
+                continue;
+            }
+
+            for sub_id in sub_ids {
+                let cached = sub_cache
+                    .iter()
+                    .find(|(id, _, _)| id == sub_id)
+                    .map(|(_, conn, qg)| (*conn, *qg));
+                let (connection_id, is_queue_group) = match cached {
+                    Some(info) => info,
+                    None => {
+                        let Some(sub_ref) = self.registry.get_ref(*sub_id) else {
+                            continue;
+                        };
+                        let conn = sub_ref.connection_id;
+                        let qg = sub_ref.queue_group_key.is_some();
+                        sub_cache.push((*sub_id, conn, qg));
+                        (conn, qg)
+                    }
+                };
+
+                if is_queue_group {
+                    // Queue groups need per-message round-robin; deliver
+                    // individually via the normal path for correctness.
+                    let message = Message {
+                        id: MessageId::new(0),
+                        subject: item.subject.clone(),
+                        payload: item.payload.clone(),
+                        headers: item.headers.clone(),
+                        reply_to: item.reply_to.clone(),
+                        timestamp_ns: 0,
+                    };
+                    self.deliver_matches(message, smallvec![*sub_id]);
+                    continue;
+                }
+
+                let delivery_msg = DeliveryMessage {
+                    subscription_id: *sub_id,
+                    connection_id,
+                    subject: item.subject.clone(),
+                    payload: item.payload.clone(),
+                    reply_to: item.reply_to.clone(),
+                    headers: item.headers.clone(),
+                };
+                pending.entry(*sub_id).or_default().push(delivery_msg);
+            }
+        }
+
+        // Stage 2: flush batched fanout deliveries per subscription.
+        for (sub_id, msgs) in pending {
+            let msgs_len = msgs.len();
+            let Some(sub_ref) = self.registry.get_ref(sub_id) else {
+                continue;
+            };
+            let delivery = sub_ref.delivery.clone();
+            drop(sub_ref);
+
+            let accepted = if msgs_len == 1 {
+                match delivery.deliver(msgs.into_iter().next().unwrap()) {
+                    DeliveryStatus::Delivered => 1,
+                    _ => 0,
+                }
+            } else {
+                delivery.deliver_batch(msgs.into_vec())
+            };
+
+            // Metric accounting: each message in the batch counts as delivered/dropped.
+            self.metrics
+                .messages_delivered
+                .fetch_add(accepted as u64, Ordering::Relaxed);
+            self.metrics
+                .messages_dropped
+                .fetch_add((msgs_len - accepted) as u64, Ordering::Relaxed);
+        }
+    }
+
+    fn deliver_matches(&self, message: Message, sub_ids: MatchResult) {
+        // Most publishes hit a small number of subscriptions; use stack storage
+        // for fanout targets and queue-group classification to avoid per-publish
+        // heap allocations in the common case.
+        let mut fanout_deliveries: SmallVec<[FanoutDelivery; 8]> = SmallVec::new();
+        let mut queue_group_members: SmallVec<[SubscriptionId; 4]> = SmallVec::new();
+        let mut last_queue_group_key: QueueGroupKeyRef = None;
 
         for sub_id in &sub_ids {
             if let Some(sub_ref) = self.registry.get_ref(*sub_id) {
-                if let Some(ref qg) = sub_ref.queue_group {
-                    let key = (
-                        sub_ref.pattern.as_str().to_string(),
-                        qg.as_str().to_string(),
-                    );
-                    queue_groups_map.entry(key).or_default().push(*sub_id);
+                if let Some(ref key) = sub_ref.queue_group_key {
+                    // Compare by pointer equality: keys are interned at subscribe time.
+                    let same_group = last_queue_group_key
+                        .as_ref()
+                        .map(|k| Arc::ptr_eq(k, key))
+                        .unwrap_or(false);
+                    if !same_group {
+                        // Deliver previous queue group if any
+                        if let Some(ref prev_key) = last_queue_group_key {
+                            self.deliver_queue_group(prev_key, &queue_group_members, &message);
+                            queue_group_members.clear();
+                        }
+                        last_queue_group_key = Some(key.clone());
+                    }
+                    queue_group_members.push(*sub_id);
                 } else {
-                    // Pre-extract delivery Arc — no second lookup needed
-                    fanout_deliveries.push((*sub_id, sub_ref.delivery.clone()));
+                    // Pre-extract delivery Arc + connection_id — no second lookup needed
+                    fanout_deliveries.push((
+                        *sub_id,
+                        sub_ref.connection_id,
+                        sub_ref.delivery.clone(),
+                    ));
                 }
             }
-        } // All DashMap guards dropped here
+        }
+
+        // Deliver any trailing queue group
+        if let Some(ref key) = last_queue_group_key {
+            self.deliver_queue_group(key, &queue_group_members, &message);
+        }
 
         // Deliver fanout directly — zero additional DashMap lookups
-        for (sub_id, delivery) in &fanout_deliveries {
+        for (sub_id, conn_id, delivery) in &fanout_deliveries {
             let delivery_msg = DeliveryMessage {
                 subscription_id: *sub_id,
-                connection_id: ConnectionId::new(0),
+                connection_id: *conn_id,
                 subject: message.subject.clone(),
                 payload: message.payload.clone(),
                 reply_to: message.reply_to.clone(),
@@ -139,53 +404,49 @@ impl BrokerCore {
             };
             self.handle_delivery_status(*sub_id, delivery.deliver(delivery_msg));
         }
+    }
 
-        // Queue group round-robin — one lookup for chosen member's delivery handle
-        if !queue_groups_map.is_empty() {
-            {
-                let groups = self.queue_groups.read();
-                for (pattern, group_name) in queue_groups_map.keys() {
-                    if let Some(group_state) = groups.get(&(pattern.clone(), group_name.clone())) {
-                        if !group_state.members.is_empty() {
-                            let idx = group_state.current_index % group_state.members.len();
-                            if let Some(&chosen_id) = group_state.members.get(idx) {
-                                self.deliver_to_subscriber(chosen_id, &message);
-                            }
-                        }
-                    }
-                }
-            }
+    fn deliver_queue_group(
+        &self,
+        key: &Arc<QueueGroupKey>,
+        members: &[SubscriptionId],
+        message: &Message,
+    ) {
+        if members.is_empty() {
+            return;
+        }
 
-            {
-                let mut groups = self.queue_groups.write();
-                for (pattern, group_name) in queue_groups_map.keys() {
-                    if let Some(group_state) =
-                        groups.get_mut(&(pattern.clone(), group_name.clone()))
-                    {
-                        if !group_state.members.is_empty() {
-                            group_state.current_index =
-                                (group_state.current_index + 1) % group_state.members.len();
-                        }
-                    }
-                }
+        // Atomic round-robin: fetch current index, choose member modulo member count,
+        // then increment. We only need the `members` slice here for delivery lookup;
+        // the canonical member list lives in `QueueGroupState`.
+        let chosen_id = self.queue_groups.get(key).and_then(|group_state| {
+            let members_len = group_state.members.len();
+            if members_len == 0 {
+                return None;
             }
+            let idx = group_state.current_index.fetch_add(1, Ordering::Relaxed) % members_len;
+            group_state.members.get(idx).copied()
+        });
+
+        if let Some(chosen_id) = chosen_id {
+            self.deliver_to_subscriber(chosen_id, message);
         }
     }
 
     fn deliver_to_subscriber(&self, sub_id: SubscriptionId, message: &Message) {
-        // Extract delivery handle and drop DashMap guard before channel send
-        // to reduce lock hold time under high concurrency
-        let delivery = {
+        // Extract delivery handle and connection_id, then drop DashMap guard before
+        // channel send to reduce lock hold time under high concurrency
+        let (delivery, conn_id) = {
             let sub_ref = match self.registry.get_ref(sub_id) {
                 Some(r) => r,
                 None => return,
             };
-            sub_ref.delivery.clone() // Arc increment
+            (sub_ref.delivery.clone(), sub_ref.connection_id) // Arc increment + Copy
         }; // DashMap guard dropped HERE
 
         let delivery_msg = DeliveryMessage {
             subscription_id: sub_id,
-            connection_id: ConnectionId::new(0), // not needed for delivery
+            connection_id: conn_id,
             subject: message.subject.clone(),
             payload: message.payload.clone(),
             reply_to: message.reply_to.clone(),
@@ -216,17 +477,14 @@ impl BrokerCore {
         // Clean up queue group entries for removed subscriptions
         if !removed.is_empty() {
             let removed_ids: Vec<SubscriptionId> = removed.iter().map(|s| s.id).collect();
-            let mut groups = self.queue_groups.write();
             for sub in &removed {
-                if let Some(ref qg) = sub.queue_group {
-                    let key = (sub.pattern.as_str().to_string(), qg.as_str().to_string());
-                    if let Some(group) = groups.get_mut(&key) {
+                if let Some(ref key) = sub.queue_group_key {
+                    if let Some(mut group) = self.queue_groups.get_mut(key) {
                         group.members.retain(|id| !removed_ids.contains(id));
-                        if group.current_index >= group.members.len() {
-                            group.current_index = 0;
-                        }
                         if group.members.is_empty() {
-                            groups.remove(&key);
+                            drop(group);
+                            self.queue_groups.remove(key);
+                            self.queue_group_keys.remove(key);
                         }
                     }
                 }

@@ -75,6 +75,7 @@ async fn slow_consumer_drops_messages() {
             zetmq_server::store::StoreManager::new(),
             shutdown_tx,
         )
+        .await
         .unwrap(),
     );
 

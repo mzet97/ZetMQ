@@ -22,8 +22,9 @@ bytes.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dashmap = "6"
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = { version = "1", default-features = false, features = ["serde", "parse", "display"] }
 clap = { version = "4", features = ["derive"] }
 thiserror.workspace = true
 tokio-rustls = "0.26"

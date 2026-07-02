@@ -187,8 +187,8 @@ impl ServerConfig {
         format!("{}:{}", self.host, self.port)
     }
 
-    pub fn load_from_file(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = std::fs::read_to_string(path)?;
+    pub async fn load_from_file(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = tokio::fs::read_to_string(path).await?;
         let config: ServerConfig = toml::from_str(&content)?;
         Ok(config)
     }
@@ -220,9 +220,9 @@ pub struct Cli {
 }
 
 impl Cli {
-    pub fn resolve(self) -> ServerConfig {
+    pub async fn resolve(self) -> ServerConfig {
         let mut config = if let Some(ref path) = self.config_file {
-            match ServerConfig::load_from_file(Path::new(path)) {
+            match ServerConfig::load_from_file(Path::new(path)).await {
                 Ok(c) => {
                     tracing::info!(path = %path, "loaded configuration from file");
                     c

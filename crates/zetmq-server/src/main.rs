@@ -14,7 +14,11 @@ fn main() {
     }));
 
     let cli = zetmq_server::config::Cli::parse();
-    let config = cli.resolve();
+    let config = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build startup runtime")
+        .block_on(cli.resolve());
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -44,6 +48,7 @@ fn main() {
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
         let server = Arc::new(
             TcpServer::new(config, broker.clone(), store.clone(), shutdown_tx.clone())
+                .await
                 .expect("failed to create server"),
         );
 

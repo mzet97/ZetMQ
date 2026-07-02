@@ -18,7 +18,7 @@ use crate::session;
 use crate::store::StoreManager;
 
 /// Build a TLS acceptor from config if TLS is enabled.
-fn build_tls_acceptor(
+async fn build_tls_acceptor(
     config: &ServerConfig,
 ) -> Result<Option<tokio_rustls::TlsAcceptor>, ServerError> {
     if !config.tls.is_enabled() {
@@ -28,13 +28,15 @@ fn build_tls_acceptor(
     let cert_path = config.tls.cert_file.as_ref().unwrap();
     let key_path = config.tls.key_file.as_ref().unwrap();
 
-    let cert_file = std::fs::File::open(cert_path)
-        .map_err(|e| ServerError::Config(format!("cannot open cert file '{cert_path}': {e}")))?;
-    let key_file = std::fs::File::open(key_path)
-        .map_err(|e| ServerError::Config(format!("cannot open key file '{key_path}': {e}")))?;
+    let cert_bytes = tokio::fs::read(cert_path)
+        .await
+        .map_err(|e| ServerError::Config(format!("cannot read cert file '{cert_path}': {e}")))?;
+    let key_bytes = tokio::fs::read(key_path)
+        .await
+        .map_err(|e| ServerError::Config(format!("cannot read key file '{key_path}': {e}")))?;
 
-    let mut cert_reader = std::io::BufReader::new(cert_file);
-    let mut key_reader = std::io::BufReader::new(key_file);
+    let mut cert_reader = std::io::BufReader::new(&cert_bytes[..]);
+    let mut key_reader = std::io::BufReader::new(&key_bytes[..]);
 
     let certs = rustls_pemfile::certs(&mut cert_reader)
         .collect::<Result<Vec<_>, _>>()
@@ -65,13 +67,13 @@ pub struct TcpServer {
 }
 
 impl TcpServer {
-    pub fn new(
+    pub async fn new(
         config: ServerConfig,
         broker: Arc<BrokerCore>,
         store: Arc<StoreManager>,
         shutdown_tx: broadcast::Sender<()>,
     ) -> Result<Self, ServerError> {
-        let tls_acceptor = build_tls_acceptor(&config)?;
+        let tls_acceptor = build_tls_acceptor(&config).await?;
         if tls_acceptor.is_some() {
             info!("TLS enabled");
         }

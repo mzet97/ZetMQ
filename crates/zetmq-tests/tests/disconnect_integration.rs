@@ -73,6 +73,7 @@ async fn disconnect_removes_subscriptions() {
             zetmq_server::store::StoreManager::new(),
             shutdown_tx,
         )
+        .await
         .unwrap(),
     );
     let server_handle = tokio::spawn(async move {

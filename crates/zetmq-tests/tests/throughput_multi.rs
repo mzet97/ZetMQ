@@ -84,7 +84,10 @@ async fn connect_client(addr: &str) -> TcpStream {
     stream
 }
 
-fn start_server(port: u16, output_buffer: usize) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
+async fn start_server(
+    port: u16,
+    output_buffer: usize,
+) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
     let config = ServerConfig {
         port,
         connection_output_buffer: output_buffer,
@@ -99,6 +102,7 @@ fn start_server(port: u16, output_buffer: usize) -> (Arc<BrokerCore>, tokio::tas
             zetmq_server::store::StoreManager::new(),
             shutdown_tx,
         )
+        .await
         .unwrap(),
     );
     let _b = broker.clone();
@@ -114,7 +118,7 @@ fn start_server(port: u16, output_buffer: usize) -> (Arc<BrokerCore>, tokio::tas
 async fn bench_concurrent_pubsub() {
     let port = 14400;
     let addr = format!("127.0.0.1:{port}");
-    let (broker, server) = start_server(port, 262144);
+    let (broker, server) = start_server(port, 262144).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let num_subs = 4;
@@ -232,7 +236,7 @@ async fn bench_concurrent_pubsub() {
 async fn bench_concurrent_publish() {
     let port = 14401;
     let addr = format!("127.0.0.1:{port}");
-    let (broker, server) = start_server(port, 65536);
+    let (broker, server) = start_server(port, 65536).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let num_pubs = 8;

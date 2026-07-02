@@ -9,7 +9,7 @@ use zetmq_core::BrokerCore;
 use zetmq_server::config::ServerConfig;
 use zetmq_server::network::TcpServer;
 
-fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
+async fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
     let config = ServerConfig {
         port,
         ..Default::default()
@@ -23,6 +23,7 @@ fn start_server(port: u16) -> (Arc<BrokerCore>, tokio::task::JoinHandle<()>) {
             zetmq_server::store::StoreManager::new(),
             shutdown_tx,
         )
+        .await
         .unwrap(),
     );
     let handle = tokio::spawn(async move {
@@ -100,7 +101,7 @@ async fn run_fanout_case(addr: &str, num_subscribers: usize, messages: u64) {
 async fn bench_fanout_subscribers() {
     let port = 16010;
     let addr = format!("127.0.0.1:{port}");
-    let (broker, server) = start_server(port);
+    let (broker, server) = start_server(port).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let messages = 10_000u64;

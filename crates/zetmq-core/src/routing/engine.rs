@@ -2,11 +2,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use smallvec::{smallvec, SmallVec};
 
 use crate::id::SubscriptionId;
 use crate::routing::trie::SubjectTrie;
 use crate::subject::Subject;
 use crate::subject_pattern::{PatternToken, SubjectPattern};
+
+pub type MatchResult = SmallVec<[SubscriptionId; 8]>;
 
 #[derive(Debug)]
 pub struct RoutingEngine {
@@ -95,15 +98,17 @@ impl RoutingEngine {
             self.wildcard_trie
                 .write()
                 .remove(&tokens, sub_id, has_multi);
-            // Note: we don't clear has_wildcards here because checking if the trie
-            // is empty requires a read lock, which would defeat the purpose of the flag.
-            // The flag is conservative: it may stay true even after all wildcards are removed,
-            // but it's never wrong to check the trie.
+            // Reset the fast-path flag if the trie is now empty, so exact-only publishes
+            // skip the RwLock acquisition. This is a best-effort optimization: the flag is
+            // conservative and never produces incorrect results.
+            if self.wildcard_trie.read().is_empty() {
+                self.has_wildcards.store(false, Ordering::Release);
+            }
         }
     }
 
-    pub fn match_subject(&self, subject: &Subject) -> Vec<SubscriptionId> {
-        let mut results = Vec::with_capacity(8);
+    pub fn match_subject(&self, subject: &Subject) -> MatchResult {
+        let mut results = smallvec![];
 
         if let Some(subs) = self.exact.get(subject.as_str()) {
             results.extend_from_slice(&subs);
@@ -119,6 +124,56 @@ impl RoutingEngine {
         }
 
         results
+    }
+
+    pub fn has_wildcards(&self) -> bool {
+        self.has_wildcards.load(Ordering::Acquire)
+    }
+
+    pub fn exact_is_empty(&self, subject_str: &str) -> bool {
+        self.exact
+            .get(subject_str)
+            .map(|subs| subs.is_empty())
+            .unwrap_or(true)
+    }
+
+    /// Return the single exact subscriber for a subject, if there is exactly one.
+    /// This is cheaper than `match_subject` because it avoids allocating a
+    /// `MatchResult` and is used by high-throughput publish paths to decide
+    /// whether a single-subscriber fast path applies.
+    pub fn exact_single_subscriber(&self, subject: &Subject) -> Option<SubscriptionId> {
+        self.exact.get(subject.as_str()).and_then(|subs| {
+            if subs.len() == 1 {
+                Some(subs[0])
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Match a subject given as a raw string. Avoids constructing a `Subject` when
+    /// there are only exact subscriptions and no wildcard subscribers.
+    /// Returns the matching subscription IDs and a flag indicating whether a
+    /// full `Subject` parse is required for wildcard matching.
+    pub fn match_subject_str(&self, subject_str: &str) -> (MatchResult, bool) {
+        let mut results = smallvec![];
+
+        if let Some(subs) = self.exact.get(subject_str) {
+            results.extend_from_slice(&subs);
+        }
+
+        let needs_wildcard_parse = self.has_wildcards.load(Ordering::Acquire);
+        (results, needs_wildcard_parse)
+    }
+
+    /// Match only wildcard subscriptions for a parsed subject. Used by the
+    /// string-subject publish fast path after exact matches have been collected.
+    pub fn match_wildcards(&self, subject: &Subject) -> MatchResult {
+        if self.has_wildcards.load(Ordering::Acquire) {
+            self.wildcard_trie.read().match_subject(subject)
+        } else {
+            smallvec![]
+        }
     }
 }
 
@@ -138,7 +193,7 @@ mod tests {
         let engine = RoutingEngine::new();
         let sub = SubscriptionId::new(1);
         engine.insert(&pattern("orders.created"), sub);
-        assert_eq!(engine.match_subject(&subject("orders.created")), vec![sub]);
+        assert_eq!(engine.match_subject(&subject("orders.created"))[0], sub);
     }
 
     #[test]
@@ -155,7 +210,7 @@ mod tests {
         let engine = RoutingEngine::new();
         let sub = SubscriptionId::new(1);
         engine.insert(&pattern("orders.*"), sub);
-        assert_eq!(engine.match_subject(&subject("orders.created")), vec![sub]);
+        assert_eq!(engine.match_subject(&subject("orders.created"))[0], sub);
         assert!(engine
             .match_subject(&subject("orders.created.high"))
             .is_empty());
@@ -166,10 +221,10 @@ mod tests {
         let engine = RoutingEngine::new();
         let sub = SubscriptionId::new(1);
         engine.insert(&pattern("orders.>"), sub);
-        assert_eq!(engine.match_subject(&subject("orders.created")), vec![sub]);
+        assert_eq!(engine.match_subject(&subject("orders.created"))[0], sub);
         assert_eq!(
-            engine.match_subject(&subject("orders.created.high")),
-            vec![sub]
+            engine.match_subject(&subject("orders.created.high"))[0],
+            sub
         );
     }
 
@@ -210,5 +265,19 @@ mod tests {
         // Now add a wildcard — flag should flip
         engine.insert(&pattern("orders.*"), SubscriptionId::new(2));
         assert!(engine.has_wildcards.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn has_wildcards_resets_when_trie_empties() {
+        let engine = RoutingEngine::new();
+        let sub = SubscriptionId::new(1);
+        engine.insert(&pattern("orders.*"), sub);
+        assert!(engine.has_wildcards.load(Ordering::Acquire));
+
+        engine.remove(&pattern("orders.*"), sub);
+        assert!(
+            !engine.has_wildcards.load(Ordering::Acquire),
+            "flag should reset to false when all wildcard subscriptions are removed"
+        );
     }
 }

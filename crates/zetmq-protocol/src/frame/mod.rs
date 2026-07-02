@@ -5,4 +5,4 @@ pub mod header;
 
 pub use frame::Frame;
 pub use frame_type::FrameType;
-pub use header::FrameHeader;
+pub use header::{FrameHeader, FRAME_HEADER_SIZE};

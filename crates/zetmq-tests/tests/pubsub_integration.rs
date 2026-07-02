@@ -76,6 +76,7 @@ async fn test_connect_subscribe_publish_msg() {
             zetmq_server::store::StoreManager::new(),
             shutdown_tx,
         )
+        .await
         .unwrap(),
     );
 

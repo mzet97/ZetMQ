@@ -44,7 +44,7 @@ async fn handle_connection(
     broker: Arc<BrokerCore>,
     store: Arc<StoreManager>,
 ) -> std::io::Result<()> {
-    let mut buffer = [0_u8; 1024];
+    let mut buffer = [0_u8; 8192];
     let bytes_read = stream.read(&mut buffer).await?;
     if bytes_read == 0 {
         return Ok(());
