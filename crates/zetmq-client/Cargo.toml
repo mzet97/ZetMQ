@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-zetmq-protocol = { version = "0.2.1", path = "../zetmq-protocol" }
+zetmq-protocol = { version = "0.2.2", path = "../zetmq-protocol" }
 tokio.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
