@@ -1,0 +1,22 @@
+# Build artifacts
+target/
+
+# Git metadata
+.git/
+.gitignore
+
+# CI/docs
+.github/
+*.md
+LICENSE
+
+# IDE
+.vscode/
+.idea/
+
+# OMC state
+.omc/
+
+# OS files
+.DS_Store
+Thumbs.db
