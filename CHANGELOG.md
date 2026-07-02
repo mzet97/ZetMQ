@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-01
+
+### Changed
+
+- Major throughput improvements on the hot PUB path, now exceeding NATS 2.14.3 WSL numbers on comparable single-publisher benchmarks:
+  - pub pure (no subscribers): ~11–16M ops/s
+  - pub/sub 1:1: ~3.5–4.2M ops/s
+  - fan-out 1→4: ~6.8–7.0M total deliveries/s
+  - fan-out 1→10: ~8.0–9.1M total deliveries/s
+- Added fast no-subscriber PUB drain path with batched local metric accounting to reduce atomic contention.
+- Added server-side `BufWriter` to coalesce outbound socket writes.
+- Switched throughput benchmarks to a multi-thread Tokio runtime and increased sample sizes for stable measurements.
+- Added header-only MSG counting in subscriber benchmark readers to reduce client-side overhead.
+- Added fan-out 1→10 throughput benchmark.
+
+## [0.1.1] - 2026-05-13
+
 ### Added
 
 - Subject-based pub/sub with exact match and wildcard routing (`*`, `>`)
@@ -27,4 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integration tests: pub/sub, wildcards, backpressure, disconnect, auth, TLS, persistence, headers, request/reply, client
 - Throughput, fanout, and backpressure benchmarks
 
-[Unreleased]: https://github.com/mzet97/ZetMQ/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/mzet97/ZetMQ/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mzet97/ZetMQ/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/mzet97/ZetMQ/releases/tag/v0.1.1

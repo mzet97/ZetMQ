@@ -15,9 +15,9 @@ name = "zetmq-server"
 path = "src/main.rs"
 
 [dependencies]
-zetmq-core = { version = "0.1.1", path = "../zetmq-core" }
-zetmq-protocol = { version = "0.1.1", path = "../zetmq-protocol" }
-zetmq-store = { version = "0.1.1", path = "../zetmq-store" }
+zetmq-core = { version = "0.2.0", path = "../zetmq-core" }
+zetmq-protocol = { version = "0.2.0", path = "../zetmq-protocol" }
+zetmq-store = { version = "0.2.0", path = "../zetmq-store" }
 bytes.workspace = true
 tokio.workspace = true
 tracing.workspace = true
