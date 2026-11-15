@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-15
+
+### Security
+
+- Updated `rustls` 0.23.41 to 0.23.46 (RUSTSEC-2026-0285, RUSTSEC-2026-0346, RUSTSEC-2026-0348, RUSTSEC-2026-0349) and `rustls-webpki` to 0.103.17 (RUSTSEC-2026-0382).
+- Updated `crossbeam-epoch` 0.9.18 to 0.9.21 (RUSTSEC-2026-0204).
+- Replaced unmaintained `rustls-pemfile` (RUSTSEC-2025-0134) with `rustls-pki-types` PEM parsing in `zetmq-server`; removed the unused dependency from `zetmq-client`.
+
+### Changed
+
+- Consolidated Dependabot updates via `cargo update`: tokio 1.54.1, bytes 1.12.1, dashmap 6.2.1, smallvec 1.15.2, serde_json 1.0.150, toml 1.2.1, criterion 0.8, rcgen 0.14.
+- GitHub Actions: CodeQL moved to `actions/checkout@v6` and `codeql-action/*@v4`; Dependabot `open-pull-requests-limit` raised to 20; Docker builder image bumped to `rust:1.97-bookworm`.
+
 ## [0.2.4] - 2026-07-02
 
 ### Fixed
@@ -69,7 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integration tests: pub/sub, wildcards, backpressure, disconnect, auth, TLS, persistence, headers, request/reply, client
 - Throughput, fanout, and backpressure benchmarks
 
-[Unreleased]: https://github.com/mzet97/ZetMQ/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/mzet97/ZetMQ/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/mzet97/ZetMQ/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/mzet97/ZetMQ/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/mzet97/ZetMQ/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/mzet97/ZetMQ/compare/v0.2.1...v0.2.2
