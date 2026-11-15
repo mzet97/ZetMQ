@@ -7,6 +7,7 @@ use tokio::net::TcpListener;
 /// Helper trait to work around the multi-trait object limitation.
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> IoStream for T {}
+use rustls_pki_types::pem::PemObject;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
@@ -35,16 +36,12 @@ async fn build_tls_acceptor(
         .await
         .map_err(|e| ServerError::Config(format!("cannot read key file '{key_path}': {e}")))?;
 
-    let mut cert_reader = std::io::BufReader::new(&cert_bytes[..]);
-    let mut key_reader = std::io::BufReader::new(&key_bytes[..]);
-
-    let certs = rustls_pemfile::certs(&mut cert_reader)
+    let certs = rustls_pki_types::CertificateDer::pem_slice_iter(&cert_bytes)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| ServerError::Config(format!("failed to parse certs: {e}")))?;
 
-    let key = rustls_pemfile::private_key(&mut key_reader)
-        .map_err(|e| ServerError::Config(format!("failed to parse key: {e}")))?
-        .ok_or_else(|| ServerError::Config("no private key found in key file".into()))?;
+    let key = rustls_pki_types::PrivateKeyDer::from_pem_slice(&key_bytes)
+        .map_err(|e| ServerError::Config(format!("failed to parse key: {e}")))?;
 
     let server_config = rustls::ServerConfig::builder()
         .with_no_client_auth()
