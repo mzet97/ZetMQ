@@ -10,6 +10,6 @@ repository.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
 dashmap = "6"
-parking_lot = "0.12"
+parking_lot = "0.13"
 smallvec.workspace = true
 tracing.workspace = true
