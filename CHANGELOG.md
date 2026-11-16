@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-16
+
+### Changed
+
+- Updated `parking_lot` 0.12.5 to 0.13.0 in `zetmq-core` (plus `lock_api` 0.5.0 via `Cargo.lock`).
+- GitHub Actions: `actions/checkout` v6 to v7 across CI, CodeQL and release workflows.
+- Docker builder image bumped to `rust:1.100-bookworm`.
+
 ## [0.2.5] - 2026-11-15
 
 ### Security
@@ -82,7 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integration tests: pub/sub, wildcards, backpressure, disconnect, auth, TLS, persistence, headers, request/reply, client
 - Throughput, fanout, and backpressure benchmarks
 
-[Unreleased]: https://github.com/mzet97/ZetMQ/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/mzet97/ZetMQ/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/mzet97/ZetMQ/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/mzet97/ZetMQ/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/mzet97/ZetMQ/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/mzet97/ZetMQ/compare/v0.2.2...v0.2.3
